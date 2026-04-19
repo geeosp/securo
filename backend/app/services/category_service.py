@@ -48,6 +48,7 @@ async def create_default_categories(session: AsyncSession, user_id: uuid.UUID, l
         group = groups.get(group_key) if group_key else None
         category = Category(
             user_id=user_id,
+            key=key,
             name=name,
             icon=data["icon"],
             color=data["color"],

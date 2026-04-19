@@ -38,6 +38,9 @@ async def test_create_default_categories(session: AsyncSession, test_user):
     for cat in categories:
         assert cat.is_system is True
 
+    keys = {c.key for c in categories}
+    assert keys == set(DEFAULT_CATEGORIES_I18N)
+
 
 @pytest.mark.asyncio
 async def test_create_default_categories_creates_groups(session: AsyncSession, test_user):

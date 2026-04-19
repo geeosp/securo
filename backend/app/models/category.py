@@ -18,6 +18,7 @@ class Category(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     group_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("category_groups.id"), nullable=True)
+    key: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(100))
     icon: Mapped[str] = mapped_column(String(50), default="circle-help")
     color: Mapped[str] = mapped_column(String(7), default="#6B7280")

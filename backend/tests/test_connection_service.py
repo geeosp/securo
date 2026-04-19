@@ -50,11 +50,11 @@ async def _make_connection(
 
 
 async def _make_category(
-    session: AsyncSession, user_id: uuid.UUID, name: str,
+    session: AsyncSession, user_id: uuid.UUID, name: str, key: str | None = None,
 ) -> Category:
     cat = Category(
         id=uuid.uuid4(), user_id=user_id, name=name,
-        icon="tag", color="#000", is_system=False,
+        key=key, icon="tag", color="#000", is_system=key is not None,
     )
     session.add(cat)
     await session.commit()
@@ -125,15 +125,15 @@ def test_description_similarity_case_insensitive():
 @pytest.mark.asyncio
 async def test_match_pluggy_exact(session: AsyncSession, test_user):
     """Exact Pluggy category match maps to user's category."""
-    await _make_category(session, test_user.id, "Alimentação")
+    await _make_category(session, test_user.id, "Alimentação", key="food")
     cat_id = await _match_pluggy_category(session, test_user.id, "Eating out")
     assert cat_id is not None
 
 
 @pytest.mark.asyncio
 async def test_match_pluggy_english_default_category(session: AsyncSession, test_user):
-    """Pluggy category mapping uses Securo category keys, not one locale."""
-    await _make_category(session, test_user.id, "Food & Dining")
+    """Pluggy category mapping uses Securo category keys, not display names."""
+    await _make_category(session, test_user.id, "Food & Dining", key="food")
     cat_id = await _match_pluggy_category(session, test_user.id, "Eating out")
     assert cat_id is not None
 
@@ -141,7 +141,7 @@ async def test_match_pluggy_english_default_category(session: AsyncSession, test
 @pytest.mark.asyncio
 async def test_match_pluggy_prefix(session: AsyncSession, test_user):
     """Pluggy category with ' - ' prefix matches via split."""
-    await _make_category(session, test_user.id, "Transferências")
+    await _make_category(session, test_user.id, "Transferências", key="transfers")
     cat_id = await _match_pluggy_category(session, test_user.id, "Transfer - PIX")
     assert cat_id is not None
 
@@ -163,7 +163,7 @@ async def test_match_pluggy_none(session: AsyncSession, test_user):
 @pytest.mark.asyncio
 async def test_match_pluggy_user_has_no_category(session: AsyncSession, test_user):
     """Pluggy category maps but user doesn't have the target category."""
-    # "Eating out" maps to "Alimentação" but we don't create it
+    # "Eating out" maps to the "food" category key, but we don't create it
     cat_id = await _match_pluggy_category(session, test_user.id, "Eating out")
     assert cat_id is None
 
@@ -172,8 +172,8 @@ async def test_match_pluggy_user_has_no_category(session: AsyncSession, test_use
 async def test_apply_external_category_mappings_only_uncategorized(
     session: AsyncSession, test_user,
 ):
-    food = await _make_category(session, test_user.id, "Alimentação")
-    existing = await _make_category(session, test_user.id, "Mercado")
+    food = await _make_category(session, test_user.id, "Alimentação", key="food")
+    existing = await _make_category(session, test_user.id, "Mercado", key="groceries")
     account = await _make_account(session, test_user.id)
     txn_to_update = Transaction(
         user_id=test_user.id,
@@ -513,7 +513,7 @@ async def test_sync_connection_not_found(session: AsyncSession, test_user):
 @pytest.mark.asyncio
 async def test_sync_connection_with_category_mapping(session: AsyncSession, test_user):
     conn = await _make_connection(session, test_user.id, "Cat Bank")
-    await _make_category(session, test_user.id, "Alimentação")
+    await _make_category(session, test_user.id, "Alimentação", key="food")
 
     mock_provider = AsyncMock()
     mock_provider.refresh_credentials = AsyncMock(return_value={"token": "t"})

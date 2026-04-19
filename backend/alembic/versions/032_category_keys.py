@@ -1,7 +1,7 @@
-"""add external category to transactions
+"""add stable keys to categories
 
-Revision ID: 031
-Revises: 030
+Revision ID: 032
+Revises: 031
 Create Date: 2026-04-19
 """
 
@@ -9,10 +9,29 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect, text
 
-revision = "031"
-down_revision = "030"
+revision = "032"
+down_revision = "031"
 branch_labels = None
 depends_on = None
+
+
+SECURO_CATEGORY_NAMES = {
+    "housing": {"Housing", "Moradia"},
+    "food": {"Food & Dining", "Alimentação"},
+    "transport": {"Transport", "Transporte"},
+    "groceries": {"Groceries", "Mercado"},
+    "health": {"Health", "Saúde"},
+    "leisure": {"Leisure", "Lazer"},
+    "subscriptions": {"Subscriptions", "Assinaturas"},
+    "education": {"Education", "Educação"},
+    "transfers": {"Transfers", "Transferências"},
+    "salary": {"Salary & Income", "Salário & Renda"},
+    "shopping": {"Shopping", "Compras"},
+    "donations": {"Donations", "Doações"},
+    "personal_care": {"Personal Care", "Cuidados Pessoais"},
+    "taxes": {"Taxes & Fees", "Impostos & Taxas"},
+    "other": {"Other", "Outros"},
+}
 
 
 PLUGGY_CATEGORY_TO_SECURO_KEY = {
@@ -47,23 +66,6 @@ PLUGGY_CATEGORY_TO_SECURO_KEY = {
 }
 
 
-SECURO_CATEGORY_NAMES = {
-    "housing": {"Housing", "Moradia"},
-    "food": {"Food & Dining", "Alimentação"},
-    "transport": {"Transport", "Transporte"},
-    "groceries": {"Groceries", "Mercado"},
-    "health": {"Health", "Saúde"},
-    "leisure": {"Leisure", "Lazer"},
-    "subscriptions": {"Subscriptions", "Assinaturas"},
-    "education": {"Education", "Educação"},
-    "transfers": {"Transfers", "Transferências"},
-    "salary": {"Salary & Income", "Salário & Renda"},
-    "shopping": {"Shopping", "Compras"},
-    "personal_care": {"Personal Care", "Cuidados Pessoais"},
-    "taxes": {"Taxes & Fees", "Impostos & Taxas"},
-}
-
-
 def _has_column(conn, table_name: str, column_name: str) -> bool:
     return any(col["name"] == column_name for col in inspect(conn).get_columns(table_name))
 
@@ -81,7 +83,25 @@ def _category_key_for_external_category(external_category: str | None) -> str | 
     return PLUGGY_CATEGORY_TO_SECURO_KEY.get(external_category.split(" - ")[0])
 
 
-def _backfill_category_ids(conn) -> None:
+def _backfill_category_keys(conn) -> None:
+    for category_key, names in SECURO_CATEGORY_NAMES.items():
+        conn.execute(
+            text(
+                """
+                UPDATE categories
+                SET key = :category_key
+                WHERE key IS NULL
+                  AND name IN :category_names
+                """
+            ).bindparams(sa.bindparam("category_names", expanding=True)),
+            {"category_key": category_key, "category_names": list(names)},
+        )
+
+
+def _backfill_transaction_category_ids(conn) -> None:
+    if not _has_column(conn, "transactions", "external_category"):
+        return
+
     rows = conn.execute(
         text(
             """
@@ -98,21 +118,17 @@ def _backfill_category_ids(conn) -> None:
         if not category_key:
             continue
 
-        category_names = SECURO_CATEGORY_NAMES.get(category_key)
-        if not category_names:
-            continue
-
         category_id = conn.execute(
             text(
                 """
                 SELECT id
                 FROM categories
                 WHERE user_id = :user_id
-                  AND name IN :category_names
+                  AND key = :category_key
                 LIMIT 1
                 """
-            ).bindparams(sa.bindparam("category_names", expanding=True)),
-            {"user_id": user_id, "category_names": list(category_names)},
+            ),
+            {"user_id": user_id, "category_key": category_key},
         ).scalar_one_or_none()
         if not category_id:
             continue
@@ -133,49 +149,18 @@ def _backfill_category_ids(conn) -> None:
 def upgrade() -> None:
     conn = op.get_bind()
 
-    if not _has_column(conn, "transactions", "external_category"):
-        op.add_column(
-            "transactions",
-            sa.Column("external_category", sa.String(length=255), nullable=True),
-        )
-    if not _has_index(conn, "transactions", "ix_transactions_external_category"):
-        op.create_index(
-            "ix_transactions_external_category",
-            "transactions",
-            ["external_category"],
-        )
+    if not _has_column(conn, "categories", "key"):
+        op.add_column("categories", sa.Column("key", sa.String(length=50), nullable=True))
+    if not _has_index(conn, "categories", "ix_categories_key"):
+        op.create_index("ix_categories_key", "categories", ["key"])
 
-    if conn.dialect.name == "postgresql":
-        conn.execute(
-            text(
-                """
-                UPDATE transactions
-                SET external_category = raw_data ->> 'category'
-                WHERE external_category IS NULL
-                  AND raw_data IS NOT NULL
-                  AND raw_data ->> 'category' IS NOT NULL
-                """
-            )
-        )
-    elif conn.dialect.name == "sqlite":
-        conn.execute(
-            text(
-                """
-                UPDATE transactions
-                SET external_category = json_extract(raw_data, '$.category')
-                WHERE external_category IS NULL
-                  AND raw_data IS NOT NULL
-                  AND json_extract(raw_data, '$.category') IS NOT NULL
-                """
-            )
-        )
-
-    _backfill_category_ids(conn)
+    _backfill_category_keys(conn)
+    _backfill_transaction_category_ids(conn)
 
 
 def downgrade() -> None:
     conn = op.get_bind()
-    if _has_index(conn, "transactions", "ix_transactions_external_category"):
-        op.drop_index("ix_transactions_external_category", table_name="transactions")
-    if _has_column(conn, "transactions", "external_category"):
-        op.drop_column("transactions", "external_category")
+    if _has_index(conn, "categories", "ix_categories_key"):
+        op.drop_index("ix_categories_key", table_name="categories")
+    if _has_column(conn, "categories", "key"):
+        op.drop_column("categories", "key")

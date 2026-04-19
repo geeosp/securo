@@ -25,6 +25,7 @@ class CategoryRead(CategoryBase):
     id: uuid.UUID
     user_id: uuid.UUID
     group_id: Optional[uuid.UUID] = None
+    key: Optional[str] = None
     is_system: bool
 
     model_config = ConfigDict(from_attributes=True)

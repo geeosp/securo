@@ -14,7 +14,6 @@ from app.models.transaction import Transaction
 from app.models.user import User
 from app.providers import get_provider
 from app.services.account_service import sync_opening_balance_for_connected_account
-from app.services.category_service import DEFAULT_CATEGORIES_I18N
 from app.services.credit_card_service import apply_effective_date
 from app.services.rule_service import apply_rules_to_transaction
 from app.services.transfer_detection_service import detect_transfer_pairs
@@ -55,15 +54,6 @@ PLUGGY_CATEGORY_MAP = {
 }
 
 
-def _category_names_for_key(category_key: str) -> set[str]:
-    data = DEFAULT_CATEGORIES_I18N.get(category_key, {})
-    return {
-        value
-        for lang, value in data.items()
-        if lang in {"en", "pt-BR"} and isinstance(value, str)
-    }
-
-
 async def _match_pluggy_category(
     session: AsyncSession, user_id: uuid.UUID, external_category: Optional[str]
 ) -> Optional[uuid.UUID]:
@@ -75,16 +65,13 @@ async def _match_pluggy_category(
         app_name = PLUGGY_CATEGORY_MAP.get(external_category.split(" - ")[0])
     if not app_name:
         return None
-    category_names = _category_names_for_key(app_name)
-    if not category_names:
-        category_names = {app_name}
     result = await session.execute(
         select(Category.id).where(
             Category.user_id == user_id,
-            Category.name.in_(category_names),
+            Category.key == app_name,
         )
     )
-    return result.scalars().first()
+    return result.scalar_one_or_none()
 
 
 async def apply_external_category_mappings(
