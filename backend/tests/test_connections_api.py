@@ -100,6 +100,13 @@ async def test_detect_transfers(client: AsyncClient, auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_apply_category_mappings(client: AsyncClient, auth_headers):
+    resp = await client.post("/api/connections/categories/apply-mappings", headers=auth_headers)
+    assert resp.status_code == 200
+    assert "updated" in resp.json()
+
+
+@pytest.mark.asyncio
 async def test_unlink_transfer_not_found(client: AsyncClient, auth_headers):
     resp = await client.delete(
         f"/api/connections/transfers/{uuid.uuid4()}", headers=auth_headers,

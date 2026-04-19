@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.account import Account
 from app.models.bank_connection import BankConnection
 from app.models.category import Category
 from app.models.transaction import Transaction
@@ -14,6 +15,7 @@ from app.providers.base import AccountData, ConnectionData, ConnectTokenData, Tr
 from app.services.connection_service import (
     _description_similarity,
     _match_pluggy_category,
+    apply_external_category_mappings,
     create_connect_token,
     delete_connection,
     get_connection,
@@ -58,6 +60,27 @@ async def _make_category(
     await session.commit()
     await session.refresh(cat)
     return cat
+
+
+async def _make_account(
+    session: AsyncSession, user_id: uuid.UUID, connection: BankConnection | None = None,
+) -> Account:
+    if connection is None:
+        connection = await _make_connection(session, user_id)
+    account = Account(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        connection_id=connection.id,
+        external_id=f"acc-{uuid.uuid4().hex[:8]}",
+        name="Checking",
+        type="checking",
+        balance=Decimal("0"),
+        currency="BRL",
+    )
+    session.add(account)
+    await session.commit()
+    await session.refresh(account)
+    return account
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +131,14 @@ async def test_match_pluggy_exact(session: AsyncSession, test_user):
 
 
 @pytest.mark.asyncio
+async def test_match_pluggy_english_default_category(session: AsyncSession, test_user):
+    """Pluggy category mapping uses Securo category keys, not one locale."""
+    await _make_category(session, test_user.id, "Food & Dining")
+    cat_id = await _match_pluggy_category(session, test_user.id, "Eating out")
+    assert cat_id is not None
+
+
+@pytest.mark.asyncio
 async def test_match_pluggy_prefix(session: AsyncSession, test_user):
     """Pluggy category with ' - ' prefix matches via split."""
     await _make_category(session, test_user.id, "Transferências")
@@ -135,6 +166,61 @@ async def test_match_pluggy_user_has_no_category(session: AsyncSession, test_use
     # "Eating out" maps to "Alimentação" but we don't create it
     cat_id = await _match_pluggy_category(session, test_user.id, "Eating out")
     assert cat_id is None
+
+
+@pytest.mark.asyncio
+async def test_apply_external_category_mappings_only_uncategorized(
+    session: AsyncSession, test_user,
+):
+    food = await _make_category(session, test_user.id, "Alimentação")
+    existing = await _make_category(session, test_user.id, "Mercado")
+    account = await _make_account(session, test_user.id)
+    txn_to_update = Transaction(
+        user_id=test_user.id,
+        account_id=account.id,
+        description="RESTAURANT",
+        amount=Decimal("50"),
+        date=date.today(),
+        type="debit",
+        source="sync",
+        status="posted",
+        external_category="Eating out",
+    )
+    txn_already_categorized = Transaction(
+        user_id=test_user.id,
+        account_id=txn_to_update.account_id,
+        description="OTHER RESTAURANT",
+        amount=Decimal("25"),
+        date=date.today(),
+        type="debit",
+        source="sync",
+        status="posted",
+        category_id=existing.id,
+        external_category="Eating out",
+    )
+    txn_unmapped = Transaction(
+        user_id=test_user.id,
+        account_id=txn_to_update.account_id,
+        description="UNKNOWN",
+        amount=Decimal("10"),
+        date=date.today(),
+        type="debit",
+        source="sync",
+        status="posted",
+        external_category="Nope",
+    )
+    session.add_all([txn_to_update, txn_already_categorized, txn_unmapped])
+    await session.commit()
+
+    updated = await apply_external_category_mappings(session, test_user.id)
+    assert updated == 1
+
+    await session.refresh(txn_to_update)
+    await session.refresh(txn_already_categorized)
+    await session.refresh(txn_unmapped)
+    assert txn_to_update.category_id == food.id
+    assert txn_already_categorized.category_id == existing.id
+    assert txn_unmapped.category_id is None
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +435,42 @@ async def test_handle_oauth_callback_with_payee(session: AsyncSession, test_user
     assert conn.institution_name == "Payee Bank"
 
 
+@pytest.mark.asyncio
+async def test_handle_oauth_callback_persists_external_category(
+    session: AsyncSession, test_user,
+):
+    mock_provider = AsyncMock()
+    mock_provider.handle_oauth_callback = AsyncMock(return_value=ConnectionData(
+        external_id="ext-cat-oauth",
+        institution_name="Category Bank",
+        credentials={"token": "cat"},
+        accounts=[
+            AccountData(
+                external_id="cat-oauth-acc", name="Checking",
+                type="checking", balance=Decimal("500"), currency="BRL",
+            ),
+        ],
+    ))
+    mock_provider.get_transactions = AsyncMock(return_value=[
+        TransactionData(
+            external_id="cat-oauth-tx", description="POSTO SHELL",
+            amount=Decimal("100"), date=date.today(), type="debit",
+            currency="BRL", external_category="Gas stations",
+        ),
+    ])
+
+    with patch("app.services.connection_service.get_provider", return_value=mock_provider), \
+         patch("app.services.connection_service.detect_transfer_pairs", new_callable=AsyncMock), \
+         patch("app.services.connection_service.stamp_primary_amount", new_callable=AsyncMock), \
+         patch("app.services.connection_service.apply_rules_to_transaction", new_callable=AsyncMock):
+        await handle_oauth_callback(session, test_user.id, "code-cat", "pluggy")
+
+    row = (await session.execute(
+        select(Transaction).where(Transaction.external_id == "cat-oauth-tx")
+    )).scalar_one()
+    assert row.external_category == "Gas stations"
+
+
 # ---------------------------------------------------------------------------
 # sync_connection
 # ---------------------------------------------------------------------------
@@ -405,7 +527,7 @@ async def test_sync_connection_with_category_mapping(session: AsyncSession, test
         TransactionData(
             external_id="cat-tx-1", description="RESTAURANT",
             amount=Decimal("50"), date=date.today(), type="debit",
-            currency="BRL", pluggy_category="Eating out",
+            currency="BRL", external_category="Eating out",
         ),
     ])
 
@@ -415,6 +537,37 @@ async def test_sync_connection_with_category_mapping(session: AsyncSession, test
         result_conn, _ = await sync_connection(session, conn.id, test_user.id)
 
     assert result_conn.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_sync_connection_persists_external_category(session: AsyncSession, test_user):
+    conn = await _make_connection(session, test_user.id, "External Cat Bank")
+    mock_provider = AsyncMock()
+    mock_provider.refresh_credentials = AsyncMock(return_value={"token": "t"})
+    mock_provider.get_accounts = AsyncMock(return_value=[
+        AccountData(
+            external_id="ext-cat-acc-1", name="Checking",
+            type="checking", balance=Decimal("100"), currency="BRL",
+        ),
+    ])
+    mock_provider.get_transactions = AsyncMock(return_value=[
+        TransactionData(
+            external_id="ext-cat-tx-1", description="PIX RECEBIDO",
+            amount=Decimal("75"), date=date.today(), type="credit",
+            currency="BRL", external_category="Transfer - PIX",
+        ),
+    ])
+
+    with patch("app.services.connection_service.get_provider", return_value=mock_provider), \
+         patch("app.services.connection_service.detect_transfer_pairs", new_callable=AsyncMock), \
+         patch("app.services.connection_service.stamp_primary_amount", new_callable=AsyncMock), \
+         patch("app.services.connection_service.apply_rules_to_transaction", new_callable=AsyncMock):
+        await sync_connection(session, conn.id, test_user.id)
+
+    row = (await session.execute(
+        select(Transaction).where(Transaction.external_id == "ext-cat-tx-1")
+    )).scalar_one()
+    assert row.external_category == "Transfer - PIX"
 
 
 @pytest.mark.asyncio

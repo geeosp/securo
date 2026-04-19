@@ -48,6 +48,7 @@ async def test_parser_captures_full_installment_metadata():
             "amount": -120.50,
             "date": "2026-04-10",
             "type": "DEBIT",
+            "category": "Shopping - Online shopping",
             "creditCardMetadata": {
                 "installmentNumber": 3,
                 "totalInstallments": 12,
@@ -58,6 +59,7 @@ async def test_parser_captures_full_installment_metadata():
     ])
     assert len(result) == 1
     tx = result[0]
+    assert tx.external_category == "Shopping - Online shopping"
     assert tx.installment_number == 3
     assert tx.total_installments == 12
     assert tx.installment_total_amount == Decimal("1446.00")
@@ -77,6 +79,7 @@ async def test_parser_no_credit_card_metadata_leaves_fields_none():
         }
     ])
     tx = result[0]
+    assert tx.external_category is None
     assert tx.installment_number is None
     assert tx.total_installments is None
     assert tx.installment_total_amount is None

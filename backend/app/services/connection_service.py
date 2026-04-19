@@ -14,6 +14,7 @@ from app.models.transaction import Transaction
 from app.models.user import User
 from app.providers import get_provider
 from app.services.account_service import sync_opening_balance_for_connected_account
+from app.services.category_service import DEFAULT_CATEGORIES_I18N
 from app.services.credit_card_service import apply_effective_date
 from app.services.rule_service import apply_rules_to_transaction
 from app.services.transfer_detection_service import detect_transfer_pairs
@@ -23,46 +24,93 @@ from app.services.payee_service import get_or_create_payee
 settings = get_settings()
 
 PLUGGY_CATEGORY_MAP = {
-    "Eating out": "Alimentação",
-    "Restaurants": "Alimentação",
-    "Food": "Alimentação",
-    "Groceries": "Mercado",
-    "Supermarkets": "Mercado",
-    "Pharmacy": "Saúde",
-    "Health": "Saúde",
-    "Taxi and ride-hailing": "Transporte",
-    "Transport": "Transporte",
-    "Gas": "Transporte",
-    "Travel": "Transporte",
-    "Housing": "Moradia",
-    "Rent": "Moradia",
-    "Utilities": "Moradia",
-    "Entertainment": "Lazer",
-    "Leisure": "Lazer",
-    "Education": "Educação",
-    "Subscriptions": "Assinaturas",
-    "Online services": "Assinaturas",
-    "Transfer": "Transferências",
-    "Transfers": "Transferências",
-    "Wire transfers": "Transferências",
+    "Eating out": "food",
+    "Restaurants": "food",
+    "Food": "food",
+    "Groceries": "groceries",
+    "Supermarkets": "groceries",
+    "Pharmacy": "health",
+    "Health": "health",
+    "Taxi and ride-hailing": "transport",
+    "Transport": "transport",
+    "Gas": "transport",
+    "Travel": "transport",
+    "Housing": "housing",
+    "Rent": "housing",
+    "Utilities": "housing",
+    "Entertainment": "leisure",
+    "Leisure": "leisure",
+    "Education": "education",
+    "Subscriptions": "subscriptions",
+    "Online services": "subscriptions",
+    "Transfer": "transfers",
+    "Transfers": "transfers",
+    "Wire transfers": "transfers",
+    "Income": "salary",
+    "Salary": "salary",
+    "Shopping": "shopping",
+    "Taxes": "taxes",
+    "Taxes and Fees": "taxes",
+    "Personal care": "personal_care",
 }
 
 
+def _category_names_for_key(category_key: str) -> set[str]:
+    data = DEFAULT_CATEGORIES_I18N.get(category_key, {})
+    return {
+        value
+        for lang, value in data.items()
+        if lang in {"en", "pt-BR"} and isinstance(value, str)
+    }
+
+
 async def _match_pluggy_category(
-    session: AsyncSession, user_id: uuid.UUID, pluggy_category: Optional[str]
+    session: AsyncSession, user_id: uuid.UUID, external_category: Optional[str]
 ) -> Optional[uuid.UUID]:
-    if not pluggy_category:
+    if not external_category:
         return None
     # Try exact match first, then prefix before " - " (e.g. "Transfer - PIX" → "Transfer")
-    app_name = PLUGGY_CATEGORY_MAP.get(pluggy_category)
-    if not app_name and " - " in pluggy_category:
-        app_name = PLUGGY_CATEGORY_MAP.get(pluggy_category.split(" - ")[0])
+    app_name = PLUGGY_CATEGORY_MAP.get(external_category)
+    if not app_name and " - " in external_category:
+        app_name = PLUGGY_CATEGORY_MAP.get(external_category.split(" - ")[0])
     if not app_name:
         return None
+    category_names = _category_names_for_key(app_name)
+    if not category_names:
+        category_names = {app_name}
     result = await session.execute(
-        select(Category.id).where(Category.user_id == user_id, Category.name == app_name)
+        select(Category.id).where(
+            Category.user_id == user_id,
+            Category.name.in_(category_names),
+        )
     )
-    return result.scalar_one_or_none()
+    return result.scalars().first()
+
+
+async def apply_external_category_mappings(
+    session: AsyncSession, user_id: uuid.UUID
+) -> int:
+    """Apply known external category mappings to existing uncategorized rows."""
+    result = await session.execute(
+        select(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.category_id.is_(None),
+            Transaction.external_category.is_not(None),
+        )
+    )
+    transactions = list(result.scalars().all())
+
+    updated = 0
+    for transaction in transactions:
+        category_id = await _match_pluggy_category(
+            session, user_id, transaction.external_category
+        )
+        if category_id:
+            transaction.category_id = category_id
+            updated += 1
+
+    await session.commit()
+    return updated
 
 
 async def get_connections(session: AsyncSession, user_id: uuid.UUID) -> list[BankConnection]:
@@ -168,7 +216,7 @@ async def handle_oauth_callback(
         )
         for txn_data in transactions_data:
             category_id = await _match_pluggy_category(
-                session, user_id, txn_data.pluggy_category
+                session, user_id, txn_data.external_category
             )
             # Resolve payee entity from raw payee text
             payee_id = None
@@ -187,6 +235,7 @@ async def handle_oauth_callback(
                 type=txn_data.type,
                 source="sync",
                 status=txn_data.status,
+                external_category=txn_data.external_category,
                 payee=txn_data.payee,
                 payee_id=payee_id,
                 raw_data=txn_data.raw_data,
@@ -446,6 +495,8 @@ async def sync_connection(
                 if existing_tx:
                     if existing_tx.status == "pending" and txn_data.status == "posted":
                         existing_tx.status = "posted"
+                    if not existing_tx.external_category and txn_data.external_category:
+                        existing_tx.external_category = txn_data.external_category
                     continue
 
                 # Pass 2: Fuzzy match against manual transactions
@@ -454,13 +505,14 @@ async def sync_connection(
                     fuzzy_match.external_id = txn_data.external_id
                     fuzzy_match.source = "sync"
                     fuzzy_match.raw_data = txn_data.raw_data
+                    fuzzy_match.external_category = txn_data.external_category
                     if not fuzzy_match.payee and txn_data.payee:
                         fuzzy_match.payee = txn_data.payee
                     merged_count += 1
                     continue
 
                 category_id = await _match_pluggy_category(
-                    session, user_id, txn_data.pluggy_category
+                    session, user_id, txn_data.external_category
                 )
 
                 # Resolve payee entity from raw payee text
@@ -480,6 +532,7 @@ async def sync_connection(
                     type=txn_data.type,
                     source="sync",
                     status=txn_data.status,
+                    external_category=txn_data.external_category,
                     payee=txn_data.payee,
                     payee_id=sync_payee_id,
                     raw_data=txn_data.raw_data,

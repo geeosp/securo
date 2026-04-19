@@ -52,6 +52,7 @@ class TransactionRead(TransactionBase):
     currency: str = "USD"
     source: str
     status: str = "posted"
+    external_category: Optional[str] = None
     payee: Optional[str] = None
     payee_id: Optional[uuid.UUID] = None
     payee_name: Optional[str] = None

@@ -171,6 +171,16 @@ async def detect_transfers(
     return {"pairs_created": pairs_created}
 
 
+@router.post("/categories/apply-mappings")
+async def apply_category_mappings(
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    """One-time backfill scan: map imported categories onto uncategorized transactions."""
+    updated = await connection_service.apply_external_category_mappings(session, user.id)
+    return {"updated": updated}
+
+
 @router.delete("/transfers/{pair_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def unlink_transfer(
     pair_id: uuid.UUID,

@@ -280,7 +280,7 @@ class PluggyProvider(BankProvider):
                             type=txn_type,
                             currency=txn.get("currencyCode"),
                             amount_in_account_currency=amount_in_account_currency,
-                            pluggy_category=txn.get("category"),
+                            external_category=txn.get("category"),
                             status=status,
                             payee=payee,
                             raw_data=txn,

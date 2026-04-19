@@ -119,6 +119,13 @@ class TestTransactionReadInstallmentFields:
         assert dumped["installment_total_amount"] == 300.00
         assert dumped["installment_purchase_date"] == "2026-03-25"
 
+    def test_external_category_serializes_in_api_response(self):
+        data = TransactionRead.model_validate(self._base(
+            external_category="Transfer - TED",
+        ))
+        dumped = data.model_dump(mode="json")
+        assert dumped["external_category"] == "Transfer - TED"
+
 
 class TestTransactionCreateDateField:
     """Ensure TransactionCreate also handles the date field correctly."""

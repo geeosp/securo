@@ -29,7 +29,7 @@ class TransactionData:
     type: str  # debit, credit
     currency: Optional[str] = None  # ISO currency code (e.g. BRL, USD)
     amount_in_account_currency: Optional[Decimal] = None  # Bank-provided conversion for intl txns
-    pluggy_category: Optional[str] = None
+    external_category: Optional[str] = None
     status: str = "posted"  # posted, pending
     payee: Optional[str] = None
     raw_data: Optional[dict] = None

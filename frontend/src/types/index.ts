@@ -123,6 +123,7 @@ export interface Transaction {
   type: 'debit' | 'credit'
   source: string
   status: 'posted' | 'pending'
+  external_category: string | null
   payee: string | null
   payee_id: string | null
   payee_name: string | null
