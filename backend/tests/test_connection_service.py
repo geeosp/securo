@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.account import Account
 from app.models.bank_connection import BankConnection
 from app.models.category import Category
 from app.models.transaction import Transaction
@@ -380,6 +381,58 @@ async def test_sync_connection_new_transactions(session: AsyncSession, test_user
 
     assert result_conn.status == "active"
     assert merged == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_connection_creates_investment_account_and_transactions(
+    session: AsyncSession, test_user,
+):
+    conn = await _make_connection(session, test_user.id, "Investment Bank")
+    mock_provider = AsyncMock()
+    mock_provider.refresh_credentials = AsyncMock(return_value={"token": "t"})
+    mock_provider.get_accounts = AsyncMock(return_value=[
+        AccountData(
+            external_id="inv-acc-1", name="Tesouro Selic",
+            type="investment", balance=Decimal("1250"), currency="BRL",
+        ),
+    ])
+    mock_provider.get_transactions = AsyncMock(return_value=[
+        TransactionData(
+            external_id="inv-buy-1", description="Aplicação",
+            amount=Decimal("1000"), date=date(2026, 4, 1),
+            type="credit", currency="BRL",
+        ),
+        TransactionData(
+            external_id="inv-sell-1", description="Resgate",
+            amount=Decimal("100"), date=date(2026, 4, 10),
+            type="debit", currency="BRL",
+        ),
+    ])
+
+    with patch("app.services.connection_service.get_provider", return_value=mock_provider), \
+         patch("app.services.connection_service.detect_transfer_pairs", new_callable=AsyncMock), \
+         patch("app.services.connection_service.stamp_primary_amount", new_callable=AsyncMock), \
+         patch("app.services.connection_service.apply_rules_to_transaction", new_callable=AsyncMock):
+        await sync_connection(session, conn.id, test_user.id)
+
+    account = (await session.execute(
+        select(Account).where(Account.external_id == "inv-acc-1")
+    )).scalar_one()
+    assert account.type == "investment"
+    assert account.balance == Decimal("1250.00")
+    mock_provider.get_transactions.assert_awaited_once()
+    assert mock_provider.get_transactions.await_args.kwargs["account_type"] == "investment"
+
+    txns = (await session.execute(
+        select(Transaction).where(
+            Transaction.account_id == account.id,
+            Transaction.source != "opening_balance",
+        ).order_by(Transaction.external_id)
+    )).scalars().all()
+    assert [(txn.external_id, txn.type, txn.amount) for txn in txns] == [
+        ("inv-buy-1", "credit", Decimal("1000.00")),
+        ("inv-sell-1", "debit", Decimal("100.00")),
+    ]
 
 
 @pytest.mark.asyncio

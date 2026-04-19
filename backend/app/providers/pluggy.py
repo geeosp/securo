@@ -1,3 +1,4 @@
+import hashlib
 import time
 from datetime import date
 from decimal import Decimal
@@ -29,7 +30,7 @@ def _parse_day(value) -> Optional[int]:
 
 def _build_account_data(acc: dict, type_mapper) -> AccountData:
     """Map a Pluggy account payload to AccountData, including creditData when present."""
-    account_type = type_mapper(acc.get("type", ""))
+    account_type = type_mapper(acc.get("type", ""), acc.get("subtype"))
     credit_data = acc.get("creditData") or {}
 
     credit_limit: Optional[Decimal] = None
@@ -63,6 +64,17 @@ def _build_account_data(acc: dict, type_mapper) -> AccountData:
         minimum_payment=minimum_payment,
         card_brand=card_brand,
         card_level=card_level,
+    )
+
+
+def _build_investment_account_data(investment: dict) -> AccountData:
+    """Map a Pluggy investment holding to the existing account abstraction."""
+    return AccountData(
+        external_id=investment["id"],
+        name=investment["name"],
+        type="investment",
+        balance=Decimal(str(investment.get("balance", 0))),
+        currency=investment.get("currencyCode", "USD"),
     )
 
 
@@ -154,7 +166,7 @@ class PluggyProvider(BankProvider):
             item_resp.raise_for_status()
             item_data = item_resp.json()
 
-            # Fetch accounts for this item
+            # Fetch bank/credit accounts and investment holdings for this item
             accounts_resp = await client.get(
                 f"{PLUGGY_API_BASE}/accounts",
                 headers=headers,
@@ -163,11 +175,15 @@ class PluggyProvider(BankProvider):
             accounts_resp.raise_for_status()
             accounts_data = accounts_resp.json()
 
+            investments_data = await self._fetch_investments(client, headers, item_id)
+
         institution_name = item_data.get("connector", {}).get("name", "Unknown Bank")
 
         account_list = []
         for acc in accounts_data.get("results", []):
             account_list.append(_build_account_data(acc, self._map_account_type))
+        for investment in investments_data:
+            account_list.append(_build_investment_account_data(investment))
 
         return ConnectionData(
             external_id=item_id,
@@ -188,16 +204,23 @@ class PluggyProvider(BankProvider):
             )
             resp.raise_for_status()
             data = resp.json()
+            investments_data = await self._fetch_investments(client, headers, item_id)
 
         accounts = []
         for acc in data.get("results", []):
             accounts.append(_build_account_data(acc, self._map_account_type))
+        for investment in investments_data:
+            accounts.append(_build_investment_account_data(investment))
         return accounts
 
     async def get_transactions(
         self, credentials: dict, account_external_id: str,
         since: Optional[date] = None, payee_source: str = "auto",
+        account_type: Optional[str] = None,
     ) -> list[TransactionData]:
+        if account_type == "investment":
+            return await self._get_investment_transactions(account_external_id, since)
+
         headers = await self._headers()
         all_transactions: list[TransactionData] = []
         page = 1
@@ -298,6 +321,107 @@ class PluggyProvider(BankProvider):
 
         return all_transactions
 
+    async def _fetch_investments(
+        self, client: httpx.AsyncClient, headers: dict, item_id: str
+    ) -> list[dict]:
+        all_investments: list[dict] = []
+        page = 1
+
+        while True:
+            resp = await client.get(
+                f"{PLUGGY_API_BASE}/investments",
+                headers=headers,
+                params={"itemId": item_id, "pageSize": 500, "page": page},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            all_investments.extend(data.get("results", []))
+
+            total_pages = data.get("totalPages", 1)
+            if page >= total_pages:
+                break
+            page += 1
+
+        return all_investments
+
+    async def _get_investment_transactions(
+        self, investment_external_id: str, since: Optional[date] = None
+    ) -> list[TransactionData]:
+        headers = await self._headers()
+        all_transactions: list[TransactionData] = []
+        page = 1
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            while True:
+                resp = await client.get(
+                    f"{PLUGGY_API_BASE}/investments/{investment_external_id}/transactions",
+                    headers=headers,
+                    params={"pageSize": 500, "page": page},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+                results = data.get("results", [])
+                if not results:
+                    break
+
+                for index, txn in enumerate(results):
+                    date_raw = txn.get("date") or txn.get("tradeDate")
+                    txn_date = date.fromisoformat(str(date_raw)[:10])
+                    if since and txn_date < since:
+                        continue
+
+                    amount_raw = txn.get("netAmount")
+                    if amount_raw is None:
+                        amount_raw = txn.get("amount", 0)
+                    amount = Decimal(str(abs(amount_raw)))
+                    pluggy_type = str(txn.get("type", "")).upper()
+                    if pluggy_type == "BUY":
+                        txn_type = "credit"
+                    elif pluggy_type in {"SELL", "TAX"}:
+                        txn_type = "debit"
+                    else:
+                        txn_type = "credit" if Decimal(str(amount_raw)) >= 0 else "debit"
+
+                    description = txn.get("description") or pluggy_type.title() or "Investment transaction"
+                    external_id = txn.get("id")
+                    if not external_id:
+                        fingerprint = hashlib.sha256(
+                            "|".join(
+                                [
+                                    investment_external_id,
+                                    str(txn.get("date", "")),
+                                    str(txn.get("tradeDate", "")),
+                                    str(txn.get("type", "")),
+                                    str(txn.get("amount", "")),
+                                    str(txn.get("quantity", "")),
+                                    str(page),
+                                    str(index),
+                                ]
+                            ).encode("utf-8")
+                        ).hexdigest()[:32]
+                        external_id = f"{investment_external_id}:{fingerprint}"
+
+                    all_transactions.append(
+                        TransactionData(
+                            external_id=external_id,
+                            description=description,
+                            amount=amount,
+                            date=txn_date,
+                            type=txn_type,
+                            currency=None,
+                            status="posted",
+                            raw_data=txn,
+                        )
+                    )
+
+                total_pages = data.get("totalPages", 1)
+                if page >= total_pages:
+                    break
+                page += 1
+
+        return all_transactions
+
     async def refresh_credentials(self, credentials: dict) -> dict:
         # Pluggy manages API keys at the provider level, not per-connection
         return credentials
@@ -359,10 +483,19 @@ class PluggyProvider(BankProvider):
         return None
 
     @staticmethod
-    def _map_account_type(pluggy_type: str) -> str:
-        mapping = {
+    def _map_account_type(pluggy_type: str, pluggy_subtype: Optional[str] = None) -> str:
+        subtype_mapping = {
+            "CHECKING_ACCOUNT": "checking",
+            "SAVINGS_ACCOUNT": "savings",
+            "CREDIT_CARD": "credit_card",
+        }
+        if pluggy_subtype:
+            mapped = subtype_mapping.get(pluggy_subtype.upper())
+            if mapped:
+                return mapped
+
+        type_mapping = {
             "BANK": "checking",
             "CREDIT": "credit_card",
-            "SAVINGS": "savings",
         }
-        return mapping.get(pluggy_type.upper(), "checking")
+        return type_mapping.get(pluggy_type.upper(), "checking")

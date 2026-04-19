@@ -164,7 +164,7 @@ async def handle_oauth_callback(
 
         # Fetch initial transactions (since=None fetches all available history)
         transactions_data = await provider.get_transactions(
-            connection_data.credentials, acc_data.external_id, None
+            connection_data.credentials, acc_data.external_id, None, account_type=acc_data.type
         )
         for txn_data in transactions_data:
             category_id = await _match_pluggy_category(
@@ -429,7 +429,11 @@ async def sync_connection(
                 else None
             )
             transactions_data = await provider.get_transactions(
-                credentials, acc_data.external_id, since, payee_source=payee_source
+                credentials,
+                acc_data.external_id,
+                since,
+                payee_source=payee_source,
+                account_type=acc_data.type,
             )
 
             if not import_pending:

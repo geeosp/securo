@@ -8,7 +8,7 @@ client stubbed out, so no network traffic happens.
 
 from datetime import date
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -27,6 +27,13 @@ def _mock_httpx_client(results: list[dict]) -> MagicMock:
     client.__aenter__ = AsyncMock(return_value=client)
     client.__aexit__ = AsyncMock(return_value=None)
     return client
+
+
+def _response(payload: dict) -> MagicMock:
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json = MagicMock(return_value=payload)
+    return response
 
 
 async def _fetch(txns: list[dict]):
@@ -236,3 +243,109 @@ async def test_parser_missing_purchase_date_only():
     assert tx.total_installments == 10
     assert tx.installment_total_amount == Decimal("250")
     assert tx.installment_purchase_date is None
+
+
+def test_map_account_type_uses_subtype_for_savings():
+    assert PluggyProvider._map_account_type("BANK", "SAVINGS_ACCOUNT") == "savings"
+    assert PluggyProvider._map_account_type("BANK", "CHECKING_ACCOUNT") == "checking"
+    assert PluggyProvider._map_account_type("CREDIT", "CREDIT_CARD") == "credit_card"
+
+
+@pytest.mark.asyncio
+async def test_get_accounts_includes_investments():
+    provider = PluggyProvider()
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(side_effect=[
+        _response({
+            "results": [
+                {
+                    "id": "acc-1",
+                    "name": "Poupança",
+                    "type": "BANK",
+                    "subtype": "SAVINGS_ACCOUNT",
+                    "balance": 1000,
+                    "currencyCode": "BRL",
+                }
+            ],
+            "totalPages": 1,
+        }),
+        _response({
+            "results": [
+                {
+                    "id": "inv-1",
+                    "name": "Tesouro Selic",
+                    "type": "FIXED_INCOME",
+                    "subtype": "TREASURY",
+                    "balance": 2500.25,
+                    "currencyCode": "BRL",
+                }
+            ],
+            "totalPages": 1,
+        }),
+    ])
+    fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+    fake_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch.object(
+        PluggyProvider, "_ensure_api_key", new=AsyncMock(return_value="fake-key")
+    ), patch("app.providers.pluggy.httpx.AsyncClient", return_value=fake_client):
+        accounts = await provider.get_accounts({"item_id": "item-1"})
+
+    assert [(acc.external_id, acc.type, acc.balance) for acc in accounts] == [
+        ("acc-1", "savings", Decimal("1000")),
+        ("inv-1", "investment", Decimal("2500.25")),
+    ]
+    assert fake_client.get.call_args_list == [
+        call(
+            "https://api.pluggy.ai/accounts",
+            headers={"X-API-KEY": "fake-key", "Content-Type": "application/json"},
+            params={"itemId": "item-1"},
+        ),
+        call(
+            "https://api.pluggy.ai/investments",
+            headers={"X-API-KEY": "fake-key", "Content-Type": "application/json"},
+            params={"itemId": "item-1", "pageSize": 500, "page": 1},
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_investment_transactions_maps_movements_to_account_flow():
+    provider = PluggyProvider()
+    fake_client = _mock_httpx_client([
+        {
+            "id": "buy-1",
+            "type": "BUY",
+            "description": "Aplicação CDB",
+            "amount": 1000,
+            "date": "2026-04-01T03:00:00.000Z",
+        },
+        {
+            "id": "sell-1",
+            "type": "SELL",
+            "description": "Resgate CDB",
+            "amount": 250,
+            "date": "2026-04-10T03:00:00.000Z",
+        },
+        {
+            "id": "tax-1",
+            "type": "TAX",
+            "description": "IR",
+            "netAmount": 15,
+            "amount": 20,
+            "date": "2026-04-10T03:00:00.000Z",
+        },
+    ])
+
+    with patch.object(
+        PluggyProvider, "_ensure_api_key", new=AsyncMock(return_value="fake-key")
+    ), patch("app.providers.pluggy.httpx.AsyncClient", return_value=fake_client):
+        txns = await provider.get_transactions(
+            {"item_id": "item-1"}, "inv-1", account_type="investment"
+        )
+
+    assert [(txn.external_id, txn.type, txn.amount, txn.date) for txn in txns] == [
+        ("buy-1", "credit", Decimal("1000"), date(2026, 4, 1)),
+        ("sell-1", "debit", Decimal("250"), date(2026, 4, 10)),
+        ("tax-1", "debit", Decimal("15"), date(2026, 4, 10)),
+    ]

@@ -9,7 +9,7 @@ from typing import Optional
 class AccountData:
     external_id: str
     name: str
-    type: str  # checking, savings, credit_card
+    type: str  # checking, savings, credit_card, investment
     balance: Decimal
     currency: str
     credit_limit: Optional[Decimal] = None
@@ -116,6 +116,7 @@ class BankProvider(ABC):
     async def get_transactions(
         self, credentials: dict, account_external_id: str,
         since: Optional[date] = None, payee_source: str = "auto",
+        account_type: Optional[str] = None,
     ) -> list[TransactionData]:
         """Fetch transactions for an account."""
         ...
