@@ -319,6 +319,18 @@ export default function AccountDetailPage() {
     setFilterTo(format(addMonths(parseISO(filterTo + 'T00:00:00'), direction), 'yyyy-MM-dd'))
   }
 
+  const shiftMonthBy = (direction: -1 | 1) => {
+    filterTouched.current = true
+    const from = parseISO(filterFrom + 'T00:00:00')
+    const newFrom = new Date(from.getFullYear(), from.getMonth() + direction, 1)
+    const today = new Date()
+    const isCurrentMonth =
+      newFrom.getFullYear() === today.getFullYear() && newFrom.getMonth() === today.getMonth()
+    const newTo = isCurrentMonth ? today : new Date(newFrom.getFullYear(), newFrom.getMonth() + 1, 0)
+    setFilterFrom(format(newFrom, 'yyyy-MM-dd'))
+    setFilterTo(format(newTo, 'yyyy-MM-dd'))
+  }
+
   const { data: account, isLoading: accountLoading } = useQuery({
     queryKey: ['accounts', id],
     queryFn: () => accounts.get(id!),
@@ -722,6 +734,22 @@ export default function AccountDetailPage() {
     : { start: defaultFrom(), end: defaultTo() }
   const hasFilters = filterFrom !== resolvedDefaultRange.start || filterTo !== resolvedDefaultRange.end
 
+  const isAtCurrentMonth = (() => {
+    const from = parseISO(filterFrom + 'T00:00:00')
+    const today = new Date()
+    return from.getFullYear() === today.getFullYear() && from.getMonth() === today.getMonth()
+  })()
+
+  const isCustomRange = !isCreditCard && (() => {
+    const from = parseISO(filterFrom + 'T00:00:00')
+    if (from.getDate() !== 1) return true
+    const today = new Date()
+    const currentMonth = from.getFullYear() === today.getFullYear() && from.getMonth() === today.getMonth()
+    if (currentMonth) return filterTo !== format(today, 'yyyy-MM-dd')
+    const lastOfMonth = new Date(from.getFullYear(), from.getMonth() + 1, 0)
+    return filterTo !== format(lastOfMonth, 'yyyy-MM-dd')
+  })()
+
   const isLoading = accountLoading || summaryLoading
 
   if (isLoading) {
@@ -861,24 +889,57 @@ export default function AccountDetailPage() {
               </button>
             </div>
           ) : (
-            <>
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-muted-foreground hidden md:inline">{t('transactions.from')}</label>
-                <DatePickerInput
-                  value={filterFrom}
-                  onChange={handleFilterFromChange}
-                  placeholder={t('transactions.from')}
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-muted-foreground hidden md:inline">{t('transactions.to')}</label>
-                <DatePickerInput
-                  value={filterTo}
-                  onChange={handleFilterToChange}
-                  placeholder={t('transactions.to')}
-                />
-              </div>
-            </>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:border-border hover:text-foreground transition-all"
+                onClick={() => shiftMonthBy(-1)}
+                title={t('accounts.previousMonth')}
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="inline-flex items-center justify-center gap-2 min-w-[140px] border border-border rounded-lg px-3 py-1.5 text-sm bg-card text-foreground hover:bg-muted/50 transition-all cursor-pointer capitalize"
+                  >
+                    {isCustomRange
+                      ? t('accounts.customPeriod')
+                      : format(parseISO(filterFrom + 'T00:00:00'), 'MMM yyyy', {
+                          locale: i18n.language === 'pt-BR' ? ptBR : enUS,
+                        })}
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="center" className="w-auto p-3 space-y-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">{t('transactions.from')}</Label>
+                    <DatePickerInput
+                      value={filterFrom}
+                      onChange={handleFilterFromChange}
+                      placeholder={t('transactions.from')}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">{t('transactions.to')}</Label>
+                    <DatePickerInput
+                      value={filterTo}
+                      onChange={handleFilterToChange}
+                      placeholder={t('transactions.to')}
+                    />
+                  </div>
+                </PopoverContent>
+              </Popover>
+              <button
+                type="button"
+                className="h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:border-border hover:text-foreground transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                onClick={() => shiftMonthBy(1)}
+                disabled={isAtCurrentMonth}
+                title={t('accounts.nextMonth')}
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
           )}
           {hasFilters && (
             <Button
