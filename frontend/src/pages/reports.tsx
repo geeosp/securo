@@ -637,7 +637,7 @@ export default function ReportsPage() {
                         </p>
                         {change !== null && (
                           <p className="text-xs" style={{ color: changeColor }}>
-                            {t('reports.change', { defaultValue: 'Change' })}:{' '}
+                            {t('reports.change')}:{' '}
                             {privacyMode ? MASK : `${changeSign}${formatCurrency(change, userCurrency, locale)}`}
                           </p>
                         )}
