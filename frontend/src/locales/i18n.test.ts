@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -5,8 +6,8 @@ import { describe, expect, it } from 'vitest'
 
 const LOCALES_DIR = path.dirname(fileURLToPath(import.meta.url))
 const LOCALES = readdirSync(LOCALES_DIR)
-  .filter((f) => f.endsWith('.json'))
-  .map((f) => f.replace(/\.json$/, ''))
+  .filter((f: string) => f.endsWith('.json'))
+  .map((f: string) => f.replace(/\.json$/, ''))
 
 function readRaw(locale: string): string {
   return readFileSync(path.join(LOCALES_DIR, `${locale}.json`), 'utf-8')
@@ -131,7 +132,7 @@ describe('i18n locale files', () => {
   describe('all languages contain all keys from en.json', () => {
     const enKeys = new Set(flattenKeys(JSON.parse(readRaw('en'))))
 
-    for (const locale of LOCALES.filter((l) => l !== 'en')) {
+    for (const locale of LOCALES.filter((l: string) => l !== 'en')) {
       it(locale, () => {
         const keys = new Set(flattenKeys(JSON.parse(readRaw(locale))))
         // A key is covered if the locale has the key directly OR has at least one
@@ -145,7 +146,7 @@ describe('i18n locale files', () => {
   describe('no extra keys not present in en.json', () => {
     const enKeys = new Set(flattenKeys(JSON.parse(readRaw('en'))))
 
-    for (const locale of LOCALES.filter((l) => l !== 'en')) {
+    for (const locale of LOCALES.filter((l: string) => l !== 'en')) {
       it(locale, () => {
         const keys = new Set(flattenKeys(JSON.parse(readRaw(locale))))
         // A key is valid if it exists in en directly, OR if it is a plural form
@@ -163,7 +164,7 @@ describe('i18n locale files', () => {
   describe('placeholder variables match en.json', () => {
     const enValues = flattenValues(JSON.parse(readRaw('en')))
 
-    for (const locale of LOCALES.filter((l) => l !== 'en')) {
+    for (const locale of LOCALES.filter((l: string) => l !== 'en')) {
       it(locale, () => {
         const localeValues = flattenValues(JSON.parse(readRaw(locale)))
         const mismatches: string[] = []
