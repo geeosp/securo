@@ -814,7 +814,7 @@ export default function ReportsPage() {
                 <button
                   type="button"
                   onClick={() => setSelectedDate(null)}
-                  className="absolute top-full mt-1 flex items-center gap-1 rounded-full bg-primary/10 border border-primary/30 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20 whitespace-nowrap"
+                  className="absolute top-full mt-1 z-10 flex items-center gap-1 rounded-full bg-primary/10 border border-primary/30 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20 whitespace-nowrap"
                 >
                   {selectedDate}
                   <X className="h-3 w-3" />
