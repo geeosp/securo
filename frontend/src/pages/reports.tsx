@@ -808,13 +808,13 @@ export default function ReportsPage() {
         {/* Composition widget — summary ring + ranked, labelled detail bars */}
         <div className={`rounded-xl border shadow-sm transition-colors ${selectedDate ? 'bg-primary/5 border-primary/50' : 'bg-card border-border'}`}>
           <div className="px-5 pt-4 pb-2 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="relative">
               <p className="text-sm font-semibold text-foreground">{t('reports.composition')}</p>
               {selectedDate && (
                 <button
                   type="button"
                   onClick={() => setSelectedDate(null)}
-                  className="flex items-center gap-1 rounded-full bg-primary/10 border border-primary/30 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20"
+                  className="absolute top-full mt-1 flex items-center gap-1 rounded-full bg-primary/10 border border-primary/30 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20 whitespace-nowrap"
                 >
                   {selectedDate}
                   <X className="h-3 w-3" />
@@ -947,21 +947,16 @@ export default function ReportsPage() {
                         </div>
                       </div>
                       <div key={compositionView} className="flex flex-col items-center gap-1 px-3 mt-1 w-full">
-                        {/* Inner-ring (summary) legend only when there is no detailed
-                            outer ring — otherwise the toggle + center label already
-                            name it, and the detailed legend below carries the colours. */}
-                        {!hasOuter && (
-                          <div className="flex flex-wrap justify-center gap-x-3 gap-y-1">
-                            {innerDonutData.map((d, i) => (
-                              <div key={`${i}-${d.name}`} className="flex items-center gap-1.5">
-                                <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: d.color }} />
-                                <span className="text-[11px] text-muted-foreground whitespace-nowrap">
-                                  {d.name.length > 30 ? d.name.slice(0, 27) + '…' : d.name}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                        <div className="flex flex-wrap justify-center gap-x-3 gap-y-1">
+                          {innerDonutData.map((d, i) => (
+                            <div key={`${i}-${d.name}`} className="flex items-center gap-1.5">
+                              <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: d.color }} />
+                              <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+                                {d.name.length > 30 ? d.name.slice(0, 27) + '…' : d.name}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                         {hasOuter && (() => {
                           const visible = outerDonutData.slice(0, 6)
                           const hiddenCount = compositionDetail.length - visible.length
