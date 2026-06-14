@@ -16,9 +16,10 @@ import {
   Tooltip,
   Legend,
   ReferenceLine,
+  ReferenceArea,
   ResponsiveContainer,
 } from 'recharts'
-import { HelpCircle } from 'lucide-react'
+import { HelpCircle, X } from 'lucide-react'
 import { reports } from '@/lib/api'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
@@ -131,6 +132,7 @@ export default function ReportsPage() {
   const [sparklineView, setSparklineView] = useState<'byExpenses' | 'byIncome'>('byExpenses')
   const [sparklinePage, setSparklinePage] = useState(0)
   const [cashFlowBaseline, setCashFlowBaseline] = useState(false)
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
   // Active Collection filter (issue #105): scope all report tabs to its
   // accounts; net worth also includes the collection's wallets' assets.
   const { activeAccountIds, activeWalletIds } = useCollectionFilter()
@@ -154,6 +156,7 @@ export default function ReportsPage() {
     setActiveTab(key)
     setCompositionView(key === 'net_worth' ? 'netWorth' : 'net')
     setSparklinePage(0)
+    setSelectedDate(null)
     // Clamp months/interval to options supported by the new tab
     const nextRanges = key === 'cash_flow' ? FORWARD_RANGE_OPTIONS : HISTORICAL_RANGE_OPTIONS
     if (!nextRanges.some((r) => r.key === rangeKey)) {
@@ -211,6 +214,21 @@ export default function ReportsPage() {
     colorMap[b.key] = b.color
   }
 
+  const snapshotTrendPoint = selectedDate
+    ? (trend.find((dp) => dp.date === selectedDate) ?? null)
+    : null
+
+  const snapshotBreakdownData = snapshotTrendPoint
+    ? Object.entries(snapshotTrendPoint.breakdowns)
+        .map(([key, rawValue]) => {
+          const orig = allBreakdowns.find((b) => b.key === key)
+          return { key, label: orig?.label ?? key, value: Math.abs(rawValue as number), color: orig?.color ?? '#6366F1' }
+        })
+        .filter((b) => b.value > 0)
+    : null
+
+  const compositionBreakdownData = snapshotBreakdownData ?? breakdownData
+
   const changePrefix = (summary?.change_amount ?? 0) >= 0 ? '+' : ''
   const changeColor = (summary?.change_amount ?? 0) >= 0 ? 'text-emerald-600' : 'text-rose-500'
 
@@ -253,7 +271,7 @@ export default function ReportsPage() {
   // Inner ring — summary view (high-level breakdown), filtered by toggle state for net_worth
   const innerDonutData = (() => {
     const excludedKeys = new Set(['netIncome', 'startingBalance', 'endingBalance'])
-    return breakdownData
+    return compositionBreakdownData
       .filter((b) => !excludedKeys.has(b.key) && (!activeCompositionGroups || activeCompositionGroups.has(groupOf(b.key))))
       .map((b) => ({
         name: t(`reports.${b.key}`, { defaultValue: b.label }),
@@ -262,16 +280,18 @@ export default function ReportsPage() {
       }))
   })()
 
+  const activeComposition = snapshotTrendPoint?.composition ?? composition
+
   // Full detail — every holding in the active group(s), largest first, labelled
   // and coloured. The donut draws only the top slice of this; the legend popover
   // lists all of it. Net worth items get a distinct palette (the long tail falls
   // back to the neutral colour); income/expense items keep the user's category colour.
   const compositionDetail = (() => {
-    if (composition.length === 0) return []
+    if (activeComposition.length === 0) return []
 
     const excludedKeys = new Set(['netIncome', 'startingBalance', 'endingBalance'])
     const activeGroups = new Set(
-      breakdownData
+      compositionBreakdownData
         .filter((b) => !excludedKeys.has(b.key) && (!activeCompositionGroups || activeCompositionGroups.has(groupOf(b.key))))
         .map((b) => groupOf(b.key))
     )
@@ -289,7 +309,7 @@ export default function ReportsPage() {
       return c.label
     }
 
-    return composition
+    return activeComposition
       .filter((c) => activeGroups.has(c.group))
       .sort((a, b) => b.value - a.value)
       .map((c, i) => ({
@@ -366,7 +386,7 @@ export default function ReportsPage() {
               {rangeOptions.map((opt) => (
                 <button
                   key={opt.key}
-                  onClick={() => setRangeKey(opt.key)}
+                  onClick={() => { setRangeKey(opt.key); setSelectedDate(null) }}
                   className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
                     rangeKey === opt.key
                       ? 'bg-primary text-primary-foreground'
@@ -381,7 +401,7 @@ export default function ReportsPage() {
               {intervalOptions.map((opt) => (
                 <button
                   key={opt.key}
-                  onClick={() => setInterval(opt.value)}
+                  onClick={() => { setInterval(opt.value); setSelectedDate(null) }}
                   className={`px-2.5 py-1.5 text-xs font-semibold transition-colors ${
                     interval === opt.value
                       ? 'bg-primary text-primary-foreground'
@@ -760,9 +780,21 @@ export default function ReportsPage() {
       {/* Breakdown: Donut + Grouped Bar */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
         {/* Composition widget — summary ring + ranked, labelled detail bars */}
-        <div className="bg-card rounded-xl border border-border shadow-sm">
+        <div className={`rounded-xl border shadow-sm transition-colors ${selectedDate ? 'bg-primary/5 border-primary/50' : 'bg-card border-border'}`}>
           <div className="px-5 pt-4 pb-2 flex items-center justify-between gap-2">
-            <p className="text-sm font-semibold text-foreground shrink-0">{t('reports.composition')}</p>
+            <div className="flex items-center gap-2 shrink-0">
+              <p className="text-sm font-semibold text-foreground">{t('reports.composition')}</p>
+              {selectedDate && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedDate(null)}
+                  className="flex items-center gap-1 rounded-full bg-primary/10 border border-primary/30 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20"
+                >
+                  {selectedDate}
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
             <div className="flex items-stretch rounded-lg border border-border bg-muted/30 overflow-hidden">
               {compositionOptions.map((opt) => (
                 <button
@@ -874,11 +906,15 @@ export default function ReportsPage() {
                           </span>
                           <span className="text-base font-bold text-foreground tabular-nums">
                             {mask(formatCompact(
-                              compositionView === 'netWorth' || compositionView === 'net' || !compositionView
-                                ? meta?.type === 'cash_flow'
-                                  ? (summary?.change_amount ?? 0)
-                                  : (summary?.primary_value ?? 0)
-                                : innerDonutData.reduce((s, d) => s + d.value, 0),
+                              snapshotTrendPoint
+                                ? (compositionView === 'netWorth' || compositionView === 'net' || !compositionView
+                                    ? snapshotTrendPoint.value
+                                    : innerDonutData.reduce((s, d) => s + d.value, 0))
+                                : compositionView === 'netWorth' || compositionView === 'net' || !compositionView
+                                  ? meta?.type === 'cash_flow'
+                                    ? (summary?.change_amount ?? 0)
+                                    : (summary?.primary_value ?? 0)
+                                  : innerDonutData.reduce((s, d) => s + d.value, 0),
                               userCurrency, locale
                             ))}
                           </span>
@@ -962,7 +998,7 @@ export default function ReportsPage() {
         </div>
 
         {/* Evolution / Category Sparklines */}
-        <div className="lg:col-span-2 bg-card rounded-xl border border-border shadow-sm">
+        <div className={`lg:col-span-2 rounded-xl border shadow-sm transition-colors ${selectedDate && meta?.type !== 'income_expenses' ? 'bg-primary/5 border-primary/50' : 'bg-card border-border'}`}>
           <div className="px-5 pt-5 pb-2 flex items-center justify-between">
             <p className="text-sm font-semibold text-foreground">
               {meta?.type === 'income_expenses'
@@ -1119,7 +1155,17 @@ export default function ReportsPage() {
               </div>
             ) : chartData.length > 0 && meta ? (
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }} stackOffset="sign">
+                <ComposedChart
+                  data={chartData}
+                  margin={{ top: 8, right: 16, left: 0, bottom: 0 }}
+                  stackOffset="sign"
+                  onClick={(payload) => {
+                    const date = payload?.activeLabel as string | undefined
+                    if (!date) return
+                    setSelectedDate((prev) => (prev === date ? null : date))
+                  }}
+                  style={{ cursor: 'pointer' }}
+                >
                   <XAxis
                     dataKey="date"
                     tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
@@ -1209,6 +1255,15 @@ export default function ReportsPage() {
                       dot={false}
                       activeDot={{ r: 4, fill: '#10B981' }}
                       isAnimationActive={false}
+                    />
+                  )}
+                  {selectedDate && (
+                    <ReferenceArea
+                      x1={selectedDate}
+                      x2={selectedDate}
+                      fill="var(--primary)"
+                      fillOpacity={0.15}
+                      strokeOpacity={0}
                     />
                   )}
                 </ComposedChart>
