@@ -309,33 +309,59 @@ export default function ReportsPage() {
       return c.label
     }
 
+    const groupOrder = compositionBreakdownData
+      .filter((b) => !excludedKeys.has(b.key) && (!activeCompositionGroups || activeCompositionGroups.has(groupOf(b.key))))
+      .map((b) => groupOf(b.key))
+
     return activeComposition
       .filter((c) => activeGroups.has(c.group))
-      .sort((a, b) => b.value - a.value)
+      .sort((a, b) => {
+        const ga = groupOrder.indexOf(a.group)
+        const gb = groupOrder.indexOf(b.group)
+        if (ga !== gb) return ga - gb
+        return b.value - a.value
+      })
       .map((c, i) => ({
         name: itemLabel(c),
         value: c.value,
         color: activeTab === 'net_worth' ? (SLICE_COLORS[i] ?? OTHER_SLICE_COLOR) : c.color,
+        group: c.group,
       }))
   })()
 
-  // Outer ring — the top slices individually, with the long tail folded into a
-  // single "Other". Capping the slice count is what keeps them tellable apart;
-  // the full breakdown stays one click away in the legend's "+N more" popover.
+  // Outer ring — per-group top-N + "Other" so each group's outer arc sums to
+  // exactly its inner arc width, keeping the two rings angularly aligned.
   const outerDonutData = (() => {
     if (compositionDetail.length === 0) return []
-    const LIMIT = SLICE_COLORS.length
-    const top = compositionDetail.slice(0, LIMIT)
-    const rest = compositionDetail.slice(LIMIT)
-    const result: { name: string; value: number; color: string }[] =
-      top.map((d) => ({ name: d.name, value: d.value, color: d.color }))
-    if (rest.length > 0) {
-      result.push({
-        name: t('reports.other'),
-        value: Math.round(rest.reduce((s, d) => s + d.value, 0) * 100) / 100,
-        color: OTHER_SLICE_COLOR,
-      })
+
+    const excludedKeys = new Set(['netIncome', 'startingBalance', 'endingBalance'])
+    const innerGroups = [...new Set(
+      compositionBreakdownData
+        .filter((b) => !excludedKeys.has(b.key) && (!activeCompositionGroups || activeCompositionGroups.has(groupOf(b.key))))
+        .map((b) => groupOf(b.key))
+    )]
+
+    const byGroup = new Map<string, typeof compositionDetail>()
+    for (const g of innerGroups) byGroup.set(g, [])
+    for (const item of compositionDetail) byGroup.get(item.group)?.push(item)
+
+    const perGroupLimit = Math.max(3, Math.ceil(SLICE_COLORS.length / Math.max(1, innerGroups.length)))
+    const result: { name: string; value: number; color: string }[] = []
+
+    for (const g of innerGroups) {
+      const items = byGroup.get(g) ?? []
+      const top = items.slice(0, perGroupLimit)
+      const rest = items.slice(perGroupLimit)
+      for (const item of top) result.push(item)
+      if (rest.length > 0) {
+        result.push({
+          name: t('reports.other'),
+          value: Math.round(rest.reduce((s, d) => s + d.value, 0) * 100) / 100,
+          color: OTHER_SLICE_COLOR,
+        })
+      }
     }
+
     return result
   })()
 
