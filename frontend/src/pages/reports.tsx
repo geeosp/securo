@@ -224,6 +224,7 @@ export default function ReportsPage() {
   const snapshotTrendPoint = selectedDate
     ? (trend.find((dp) => dp.date === selectedDate) ?? null)
     : null
+  const isHistoricalSnapshot = snapshotTrendPoint !== null && selectedDate !== trend[trend.length - 1]?.date
 
   const snapshotBreakdownData = snapshotTrendPoint
     ? Object.entries(snapshotTrendPoint.breakdowns)
@@ -952,8 +953,10 @@ export default function ReportsPage() {
                         </PieChart>
                         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none" style={{ zIndex: 0 }}>
                           <span className="text-[10px] text-muted-foreground">
-                            {compositionView === 'assetsAndAccounts' ? t('reports.youOwn', { defaultValue: 'You Own' })
-                              : compositionView === 'liabilities' ? t('reports.youOwe', { defaultValue: 'You Owe' })
+                            {compositionView === 'assetsAndAccounts'
+                              ? t(isHistoricalSnapshot ? 'reports.youOwned' : 'reports.youOwn')
+                              : compositionView === 'liabilities'
+                              ? t(isHistoricalSnapshot ? 'reports.youOwed' : 'reports.youOwe')
                               : compositionView === 'byIncome' ? t('reports.income')
                               : compositionView === 'byExpenses' ? t('reports.expenses')
                               : meta?.type === 'income_expenses' ? t('reports.netIncome')
