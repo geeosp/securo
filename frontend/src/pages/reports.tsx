@@ -47,6 +47,13 @@ const SLICE_COLORS = [
 ]
 const OTHER_SLICE_COLOR = '#9CA3AF'
 
+// Deterministic color pick: same item key always maps to the same palette slot.
+function sliceColorFor(key: string): string {
+  let h = 0
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0
+  return SLICE_COLORS[h % SLICE_COLORS.length]
+}
+
 function formatCurrency(value: number, currency = 'USD', locale = 'en-US') {
   return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(value)
 }
@@ -321,10 +328,10 @@ export default function ReportsPage() {
         if (ga !== gb) return ga - gb
         return b.value - a.value
       })
-      .map((c, i) => ({
+      .map((c) => ({
         name: itemLabel(c),
         value: c.value,
-        color: activeTab === 'net_worth' ? (SLICE_COLORS[i] ?? OTHER_SLICE_COLOR) : c.color,
+        color: activeTab === 'net_worth' ? sliceColorFor(c.key) : c.color,
         group: c.group,
       }))
   })()
