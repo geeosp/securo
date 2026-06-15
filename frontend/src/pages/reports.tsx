@@ -329,8 +329,8 @@ export default function ReportsPage() {
       }))
   })()
 
-  // Outer ring — per-group top-N + "Other" so each group's outer arc sums to
-  // exactly its inner arc width, keeping the two rings angularly aligned.
+  // Outer ring — per-group top-N + per-group "Other" so each group's outer arc
+  // sums to exactly its inner arc width, keeping the two rings angularly aligned.
   const outerDonutData = (() => {
     if (compositionDetail.length === 0) return []
 
@@ -340,6 +340,24 @@ export default function ReportsPage() {
         .filter((b) => !excludedKeys.has(b.key) && (!activeCompositionGroups || activeCompositionGroups.has(groupOf(b.key))))
         .map((b) => groupOf(b.key))
     )]
+
+    // Anchor each group's outer total to its inner ring value so per-item rounding
+    // never creates a gap or overlap between the two concentric arcs.
+    const innerGroupValue = new Map<string, number>()
+    for (const b of compositionBreakdownData) {
+      if (!excludedKeys.has(b.key) && (!activeCompositionGroups || activeCompositionGroups.has(groupOf(b.key)))) {
+        const g = groupOf(b.key)
+        innerGroupValue.set(g, (innerGroupValue.get(g) ?? 0) + b.value)
+      }
+    }
+
+    const otherLabel = (g: string) =>
+      g === 'accounts' ? t('reports.otherAccounts')
+      : g === 'assets' ? t('reports.otherAssets')
+      : g === 'liabilities' ? t('reports.otherLiabilities')
+      : g === 'income' ? t('reports.otherIncome')
+      : g === 'expenses' ? t('reports.otherExpenses')
+      : t('reports.other')
 
     const byGroup = new Map<string, typeof compositionDetail>()
     for (const g of innerGroups) byGroup.set(g, [])
@@ -351,12 +369,14 @@ export default function ReportsPage() {
     for (const g of innerGroups) {
       const items = byGroup.get(g) ?? []
       const top = items.slice(0, perGroupLimit)
-      const rest = items.slice(perGroupLimit)
+      const topSum = top.reduce((s, d) => s + d.value, 0)
+      const innerTotal = innerGroupValue.get(g) ?? topSum
+      const otherValue = Math.round((innerTotal - topSum) * 100) / 100
       for (const item of top) result.push(item)
-      if (rest.length > 0) {
+      if (otherValue > 0.005) {
         result.push({
-          name: t('reports.other'),
-          value: Math.round(rest.reduce((s, d) => s + d.value, 0) * 100) / 100,
+          name: otherLabel(g),
+          value: otherValue,
           color: OTHER_SLICE_COLOR,
         })
       }
