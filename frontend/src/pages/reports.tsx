@@ -329,8 +329,9 @@ export default function ReportsPage() {
       }))
   })()
 
-  // Outer ring — per-group top-N + per-group "Other" so each group's outer arc
-  // sums to exactly its inner arc width, keeping the two rings angularly aligned.
+  // Outer ring — items above 3 % of total get their own slice; everything else
+  // per group folds into one "Other <Group>" slice. Outer arcs are anchored to
+  // inner ring values so per-item rounding never misaligns the two rings.
   const outerDonutData = (() => {
     if (compositionDetail.length === 0) return []
 
@@ -341,8 +342,6 @@ export default function ReportsPage() {
         .map((b) => groupOf(b.key))
     )]
 
-    // Anchor each group's outer total to its inner ring value so per-item rounding
-    // never creates a gap or overlap between the two concentric arcs.
     const innerGroupValue = new Map<string, number>()
     for (const b of compositionBreakdownData) {
       if (!excludedKeys.has(b.key) && (!activeCompositionGroups || activeCompositionGroups.has(groupOf(b.key)))) {
@@ -350,6 +349,8 @@ export default function ReportsPage() {
         innerGroupValue.set(g, (innerGroupValue.get(g) ?? 0) + b.value)
       }
     }
+
+    const totalValue = [...innerGroupValue.values()].reduce((s, v) => s + v, 0)
 
     const otherLabel = (g: string) =>
       g === 'accounts' ? t('reports.otherAccounts')
@@ -363,16 +364,17 @@ export default function ReportsPage() {
     for (const g of innerGroups) byGroup.set(g, [])
     for (const item of compositionDetail) byGroup.get(item.group)?.push(item)
 
-    const perGroupLimit = Math.max(3, Math.ceil(SLICE_COLORS.length / Math.max(1, innerGroups.length)))
     const result: { name: string; value: number; color: string }[] = []
 
     for (const g of innerGroups) {
-      const items = byGroup.get(g) ?? []
-      const top = items.slice(0, perGroupLimit)
-      const topSum = top.reduce((s, d) => s + d.value, 0)
+      // items are already sorted value-desc from compositionDetail
+      const significant = (byGroup.get(g) ?? []).filter(
+        (item) => totalValue > 0 && item.value / totalValue >= 0.03
+      )
+      const topSum = significant.reduce((s, d) => s + d.value, 0)
       const innerTotal = innerGroupValue.get(g) ?? topSum
       const otherValue = Math.round((innerTotal - topSum) * 100) / 100
-      for (const item of top) result.push(item)
+      for (const item of significant) result.push(item)
       if (otherValue > 0.005) {
         result.push({
           name: otherLabel(g),
