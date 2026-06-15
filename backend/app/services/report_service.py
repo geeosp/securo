@@ -61,6 +61,45 @@ def _report_start_date(today: date, months: int, period: str | None = None) -> d
     return start.replace(day=1)
 
 
+async def _asset_value_at(
+    session: AsyncSession, workspace_id: uuid.UUID, cutoff: date,
+    primary_currency: str = "USD",
+    group_ids: Optional[list[uuid.UUID]] = None,
+) -> float:
+    """Sum of all active asset values at a given date, converted to primary currency."""
+    asset_stmt = select(Asset).where(
+        Asset.workspace_id == workspace_id,
+        Asset.is_archived == False,
+        Asset.sell_date.is_(None),
+    )
+    if group_ids is not None:
+        asset_stmt = asset_stmt.where(Asset.group_id.in_(group_ids))
+    asset_result = await session.execute(asset_stmt)
+    total = 0.0
+    for asset in asset_result.scalars().all():
+        val_result = await session.execute(
+            select(AssetValue.amount)
+            .where(AssetValue.asset_id == asset.id, AssetValue.date <= cutoff)
+            .order_by(desc(AssetValue.date), desc(AssetValue.id))
+            .limit(1)
+        )
+        val = val_result.scalar_one_or_none()
+        if val is not None:
+            amount = float(val)
+        elif asset.purchase_price is not None and (
+            asset.purchase_date is None or asset.purchase_date <= cutoff
+        ):
+            amount = float(asset.purchase_price)
+        else:
+            amount = 0.0
+        if amount > 0:
+            converted, _ = await convert(
+                session, Decimal(str(amount)), asset.currency, primary_currency, cutoff
+            )
+            total += float(converted)
+    return total
+
+
 async def _net_worth_at(
     session: AsyncSession, workspace_id: uuid.UUID, cutoff: date,
     primary_currency: str = "USD",
