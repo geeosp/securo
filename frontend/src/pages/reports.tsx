@@ -372,12 +372,16 @@ export default function ReportsPage() {
     for (const g of innerGroups) byGroup.set(g, [])
     for (const item of compositionDetail) byGroup.get(item.group)?.push(item)
 
-    const result: { name: string; value: number; color: string }[] = []
+    const result: { name: string; value: number; color: string; children?: { name: string; value: number; color: string }[] }[] = []
 
     for (const g of innerGroups) {
       // items are already sorted value-desc from compositionDetail
-      const significant = (byGroup.get(g) ?? []).filter(
+      const all = byGroup.get(g) ?? []
+      const significant = all.filter(
         (item) => totalValue > 0 && item.value / totalValue >= 0.03
+      )
+      const rest = all.filter(
+        (item) => totalValue <= 0 || item.value / totalValue < 0.03
       )
       const topSum = significant.reduce((s, d) => s + d.value, 0)
       const innerTotal = innerGroupValue.get(g) ?? topSum
@@ -388,6 +392,7 @@ export default function ReportsPage() {
           name: otherLabel(g),
           value: otherValue,
           color: OTHER_SLICE_COLOR,
+          children: rest.length > 0 ? rest : undefined,
         })
       }
     }
@@ -938,16 +943,38 @@ export default function ReportsPage() {
                                 const pct = donutTotal > 0 ? ((v / donutTotal) * 100).toFixed(1) : '0'
                                 const rawName = (entry.name as string) ?? ''
                                 const displayName = rawName.length > 50 ? rawName.slice(0, 47) + '…' : rawName
+                                const children = (entry.payload as { children?: { name: string; value: number; color: string }[] }).children
                                 return (
-                                  <div style={{ ...tooltipStyle, padding: '8px 12px', zIndex: 10 }}>
+                                  <div style={{ ...tooltipStyle, padding: '8px 12px', zIndex: 10, maxWidth: 220 }}>
                                     <p className="text-xs font-semibold mb-1">{displayName}</p>
                                     <p className="text-xs">
                                       {privacyMode ? MASK : `${formatCurrency(v, userCurrency, locale)} (${pct}%)`}
                                     </p>
+                                    {children && children.length > 0 && (
+                                      <div
+                                        className="mt-1.5 border-t border-border/50 pt-1.5 flex flex-col gap-0.5"
+                                        style={children.length > 10 ? { maxHeight: 180, overflowY: 'auto' } : undefined}
+                                      >
+                                        {children.map((child, i) => {
+                                          const childPct = donutTotal > 0 ? ((child.value / donutTotal) * 100).toFixed(1) : '0'
+                                          return (
+                                            <div key={i} className="flex items-center justify-between gap-3">
+                                              <div className="flex items-center gap-1.5 min-w-0">
+                                                <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: child.color }} />
+                                                <span className="text-xs text-muted-foreground truncate">{child.name}</span>
+                                              </div>
+                                              <span className="text-xs text-muted-foreground shrink-0">
+                                                {privacyMode ? MASK : `${formatCurrency(child.value, userCurrency, locale)} (${childPct}%)`}
+                                              </span>
+                                            </div>
+                                          )
+                                        })}
+                                      </div>
+                                    )}
                                   </div>
                                 )
                               }}
-                              wrapperStyle={{ zIndex: 10 }}
+                              wrapperStyle={{ zIndex: 10, pointerEvents: 'auto' }}
                               offset={20}
                             />
                         </PieChart>
