@@ -338,6 +338,28 @@ export default function ReportsPage() {
 
   const activeComposition = snapshotTrendPoint?.composition ?? composition;
 
+  // Build a stable key → color map from the full composition range (never the
+  // snapshot), sorted the same way compositionDetail sorts, so colors don't
+  // shift when switching between dates.
+  const netWorthColorMap = (() => {
+    const excludedKeys = new Set(["netIncome", "startingBalance", "endingBalance"]);
+    const groupOrder = breakdownData
+      .filter((b) => !excludedKeys.has(b.key) && (!activeCompositionGroups || activeCompositionGroups.has(groupOf(b.key))))
+      .map((b) => groupOf(b.key));
+    const activeGroups = new Set(groupOrder);
+    const sorted = [...composition]
+      .filter((c) => activeGroups.has(c.group))
+      .sort((a, b) => {
+        const ga = groupOrder.indexOf(a.group);
+        const gb = groupOrder.indexOf(b.group);
+        if (ga !== gb) return ga - gb;
+        return b.value - a.value;
+      });
+    const map = new Map<string, string>();
+    sorted.forEach((c, i) => map.set(c.key, SLICE_COLORS[i % SLICE_COLORS.length]));
+    return map;
+  })();
+
   // Full detail — every holding in the active group(s), largest first, labelled
   // and coloured. The donut draws only the top slice of this; the legend popover
   // lists all of it. Net worth items get a distinct palette (the long tail falls
@@ -396,10 +418,10 @@ export default function ReportsPage() {
         if (ga !== gb) return ga - gb;
         return b.value - a.value;
       })
-      .map((c, i) => ({
+      .map((c) => ({
         name: itemLabel(c),
         value: c.value,
-        color: activeTab === "net_worth" ? SLICE_COLORS[i % SLICE_COLORS.length] : c.color,
+        color: activeTab === "net_worth" ? (netWorthColorMap.get(c.key) ?? OTHER_SLICE_COLOR) : c.color,
         group: c.group,
       }));
   })();
