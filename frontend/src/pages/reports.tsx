@@ -1231,7 +1231,7 @@ export default function ReportsPage() {
                                   ...tooltipStyle,
                                   padding: "8px 12px",
                                   zIndex: 10,
-                                  maxWidth: 220,
+                                  maxWidth: 256,
                                 }}
                               >
                                 <p className="text-xs font-semibold mb-1">
@@ -1245,11 +1245,7 @@ export default function ReportsPage() {
                                 {children && children.length > 0 && (
                                   <div
                                     className="mt-1.5 border-t border-border/50 pt-1.5 flex flex-col gap-0.5"
-                                    style={
-                                      children.length > 10
-                                        ? { maxHeight: 180, overflowY: "auto" }
-                                        : undefined
-                                    }
+                                    style={{ maxHeight: 180, overflowY: "auto", paddingRight: "0.5rem" }}
                                   >
                                     {children.map((child, i) => {
                                       const childPct =
@@ -1272,7 +1268,7 @@ export default function ReportsPage() {
                                               }}
                                             />
                                             <span className="text-xs text-muted-foreground truncate">
-                                              {child.name}
+                                              {child.name.length > 25 ? child.name.slice(0, 22) + "…" : child.name}
                                             </span>
                                           </div>
                                           <span className="text-xs text-muted-foreground shrink-0">
@@ -1435,17 +1431,10 @@ export default function ReportsPage() {
                                                 ? d.name.slice(0, 22) + "…"
                                                 : d.name}
                                             </span>
-                                            <span className="text-[11px] tabular-nums text-foreground whitespace-nowrap">
-                                              {mask(
-                                                formatCompact(
-                                                  d.value,
-                                                  userCurrency,
-                                                  locale,
-                                                ),
-                                              )}
-                                              <span className="text-muted-foreground ml-1">
-                                                ({pct}%)
-                                              </span>
+                                            <span className="text-xs text-muted-foreground shrink-0">
+                                              {privacyMode
+                                                ? MASK
+                                                : `${formatCurrency(d.value, userCurrency, locale)} (${pct}%)`}
                                             </span>
                                           </div>
                                         );
