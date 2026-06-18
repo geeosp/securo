@@ -28,6 +28,7 @@ import {
   PopoverContent,
 } from "@/components/ui/popover";
 import { PageHeader } from "@/components/page-header";
+import { CashflowSankey } from "@/components/reports/CashflowSankey";
 import { usePrivacyMode } from "@/hooks/use-privacy-mode";
 import { useAuth } from "@/contexts/auth-context";
 import { useCollectionFilter } from "@/contexts/collection-filter-context";
@@ -84,6 +85,16 @@ const FORWARD_RANGE_OPTIONS: readonly RangeOption[] = [
   { key: "12m", months: 12 },
 ];
 
+// The Money Map answers "where did my money go lately", so it leans on recent
+// windows (down to 30 days) and drops the 2Y trend view the other tabs keep.
+const MONEY_MAP_RANGE_OPTIONS: readonly RangeOption[] = [
+  { key: '30d', months: 1 },
+  { key: '3m', months: 3 },
+  { key: '6m', months: 6 },
+  { key: 'ytd', months: 12, period: 'ytd' },
+  { key: '1y', months: 12 },
+]
+
 const HISTORICAL_INTERVAL_OPTIONS = [
   { key: "daily", value: "daily" },
   { key: "weekly", value: "weekly" },
@@ -105,6 +116,7 @@ const INTERVAL_LABELS: Record<string, string> = {
 };
 
 const RANGE_LABELS: Record<string, string> = {
+  "30d": "range30d",
   "3m": "range3m",
   "6m": "range6m",
   "1y": "range1y",
@@ -123,6 +135,7 @@ const REPORT_TABS: ReportTab[] = [
   { key: "net_worth", labelKey: "reports.netWorth", enabled: true },
   { key: "income_expenses", labelKey: "reports.incomeExpenses", enabled: true },
   { key: "cash_flow", labelKey: "reports.cashFlow", enabled: true },
+  { key: "money_map", labelKey: "reports.moneyMap", enabled: true },
 ];
 
 export default function ReportsPage() {
@@ -156,9 +169,14 @@ export default function ReportsPage() {
     REPORT_TABS.find((tab) => tab.key === activeTab) ?? REPORT_TABS[0];
 
   const isCashFlow = activeTab === "cash_flow";
+  // The Money Map (Sankey) tab is driven by the same income/expenses
+  // composition, aggregated over the selected historical range.
+  const isMoneyMap = activeTab === "money_map";
   const rangeOptions = isCashFlow
     ? FORWARD_RANGE_OPTIONS
-    : HISTORICAL_RANGE_OPTIONS;
+    : isMoneyMap
+      ? MONEY_MAP_RANGE_OPTIONS
+      : HISTORICAL_RANGE_OPTIONS;
   const intervalOptions = isCashFlow
     ? CASH_FLOW_INTERVAL_OPTIONS
     : HISTORICAL_INTERVAL_OPTIONS;
@@ -174,9 +192,13 @@ export default function ReportsPage() {
     setSelectedDate(null);
     // Clamp months/interval to options supported by the new tab
     const nextRanges =
-      key === "cash_flow" ? FORWARD_RANGE_OPTIONS : HISTORICAL_RANGE_OPTIONS;
+      key === "cash_flow"
+        ? FORWARD_RANGE_OPTIONS
+        : key === "money_map"
+          ? MONEY_MAP_RANGE_OPTIONS
+          : HISTORICAL_RANGE_OPTIONS;
     if (!nextRanges.some((r) => r.key === rangeKey)) {
-      setRangeKey(key === "cash_flow" ? "6m" : "1y");
+      setRangeKey(key === "cash_flow" ? "6m" : key === "money_map" ? "3m" : "1y");
     }
     const nextIntervals =
       key === "cash_flow"
@@ -202,7 +224,7 @@ export default function ReportsPage() {
     queryFn: () =>
       isCashFlow
         ? reports.cashFlow(months, interval, cashFlowBaseline, acctIds)
-        : activeTab === "income_expenses"
+        : activeTab === "income_expenses" || isMoneyMap
           ? reports.incomeExpenses(months, interval, acctIds, period)
           : reports.netWorth(months, interval, acctIds, walletIds, period),
     enabled: currentTab.enabled && !(noAccounts && activeTab !== "net_worth"),
@@ -575,7 +597,7 @@ export default function ReportsPage() {
                 </button>
               ))}
             </div>
-            <div className="flex items-center rounded-lg border border-border bg-card overflow-hidden">
+            <div className={`flex items-center rounded-lg border border-border bg-card overflow-hidden ${isMoneyMap ? 'hidden' : ''}`}>
               {intervalOptions.map((opt) => (
                 <button
                   key={opt.key}
@@ -699,6 +721,44 @@ export default function ReportsPage() {
         </div>
       </div>
 
+      {/* Flow (Sankey) */}
+      {isMoneyMap && (
+        <div className="bg-card rounded-xl border border-border shadow-sm mb-5">
+          <div className="px-5 pt-5 pb-2 flex items-center justify-between">
+            <p className="text-sm font-semibold text-foreground">
+              {t('reports.moneyMap')}
+            </p>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: '#10B981' }} />
+                <span className="text-[11px] text-muted-foreground">{t('reports.income')}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: '#F43F5E' }} />
+                <span className="text-[11px] text-muted-foreground">{t('reports.expenses')}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: '#0EA5E9' }} />
+                <span className="text-[11px] text-muted-foreground">{t('reports.investments')}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: '#F59E0B' }} />
+                <span className="text-[11px] text-muted-foreground">{t('reports.deficit')}</span>
+              </div>
+            </div>
+          </div>
+          <div className="px-3 pb-5">
+            {isLoading ? (
+              <div className="px-2"><Skeleton className="h-[360px] w-full" /></div>
+            ) : (
+              <CashflowSankey composition={composition} currency={userCurrency} locale={locale} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {!isMoneyMap && (
+      <>
       {/* Main Trend Chart */}
       <div className="bg-card rounded-xl border border-border shadow-sm mb-5">
         <div className="px-5 pt-5 pb-2 flex items-center justify-between">
@@ -1873,6 +1933,8 @@ export default function ReportsPage() {
           )}
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }
