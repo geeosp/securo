@@ -273,7 +273,6 @@ async def get_net_worth_report(
     # A wallet-only collection (wallets, no accounts) still filters.
     if asset_group_ids is not None and account_ids is None:
         account_ids = []
-    filtered = account_ids is not None
     today = date.today()
     start = _report_start_date(today, months, period)
 
