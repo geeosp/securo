@@ -16,7 +16,6 @@ import {
   Tooltip,
   Legend,
   ReferenceLine,
-  ReferenceArea,
   ResponsiveContainer,
 } from 'recharts'
 import { HelpCircle, X } from 'lucide-react'
@@ -931,19 +930,7 @@ export default function ReportsPage() {
         {/* Composition widget — summary ring + ranked, labelled detail bars */}
         <div className={`rounded-xl border shadow-sm transition-colors ${selectedDate ? 'bg-primary/5 border-primary/50' : 'bg-card border-border'}`}>
           <div className="px-5 pt-4 pb-2 flex items-center justify-between gap-2">
-            <div className="relative">
-              <p className="text-sm font-semibold text-foreground">{t('reports.composition')}</p>
-              {selectedDate && (
-                <button
-                  type="button"
-                  onClick={() => setSelectedDate(null)}
-                  className="absolute top-full mt-1 z-10 flex items-center gap-1 rounded-full bg-primary/10 border border-primary/30 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20 whitespace-nowrap"
-                >
-                  {selectedDate}
-                  <X className="h-3 w-3" />
-                </button>
-              )}
-            </div>
+            <p className="text-sm font-semibold text-foreground">{t('reports.composition')}</p>
             <div className="flex items-stretch rounded-lg border border-border bg-muted/30 overflow-hidden">
               {compositionOptions.map((opt) => (
                 <button
@@ -1166,13 +1153,25 @@ export default function ReportsPage() {
         {/* Evolution / Category Sparklines */}
         <div className={`lg:col-span-2 rounded-xl border shadow-sm transition-colors ${selectedDate && meta?.type !== 'income_expenses' ? 'bg-primary/5 border-primary/50' : 'bg-card border-border'}`}>
           <div className="px-5 pt-5 pb-2 flex items-center justify-between">
-            <p className="text-sm font-semibold text-foreground">
-              {meta?.type === 'income_expenses'
-                ? t('reports.categoryTrends')
-                : meta?.type === 'cash_flow'
-                  ? t('reports.inflowOutflow')
-                  : t('reports.evolution')}
-            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-semibold text-foreground">
+                {meta?.type === 'income_expenses'
+                  ? t('reports.categoryTrends')
+                  : meta?.type === 'cash_flow'
+                    ? t('reports.inflowOutflow')
+                    : t('reports.evolution')}
+              </p>
+              {selectedDate && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedDate(null)}
+                  className="flex items-center gap-1 rounded-full bg-primary/10 border border-primary/30 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20 whitespace-nowrap"
+                >
+                  {selectedDate}
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
             {meta?.type === 'income_expenses' && (() => {
               const groupKey = sparklineView === 'byIncome' ? 'income' : 'expenses'
               const allItems = (data?.category_trend ?? []).filter((c) => c.group === groupKey)
@@ -1406,7 +1405,15 @@ export default function ReportsPage() {
                           fill={color}
                           radius={radius}
                           maxBarSize={32}
-                        />
+                        >
+                          {selectedDate && chartData.map((d) => (
+                            <Cell
+                              key={d.date}
+                              fill={color}
+                              fillOpacity={d.date === selectedDate ? 1 : 0.4}
+                            />
+                          ))}
+                        </Bar>
                       )
                     })
                   })()}
@@ -1421,15 +1428,6 @@ export default function ReportsPage() {
                       dot={false}
                       activeDot={{ r: 4, fill: '#10B981' }}
                       isAnimationActive={false}
-                    />
-                  )}
-                  {selectedDate && (
-                    <ReferenceArea
-                      x1={selectedDate}
-                      x2={selectedDate}
-                      fill="var(--primary)"
-                      fillOpacity={0.15}
-                      strokeOpacity={0}
                     />
                   )}
                 </ComposedChart>
