@@ -930,7 +930,12 @@ export default function ReportsPage() {
         {/* Composition widget — summary ring + ranked, labelled detail bars */}
         <div className={`rounded-xl border shadow-sm transition-colors ${selectedDate ? 'bg-primary/5 border-primary/50' : 'bg-card border-border'}`}>
           <div className="px-5 pt-4 pb-2 flex items-center justify-between gap-2">
-            <p className="text-sm font-semibold text-foreground">{t('reports.composition')}</p>
+            <div className="flex flex-col">
+              <p className="text-sm font-semibold text-foreground">{t('reports.composition')}</p>
+              {selectedDate && (
+                <span className="text-xs text-primary font-medium">{t('reports.asOf', { date: selectedDate })}</span>
+              )}
+            </div>
             <div className="flex items-stretch rounded-lg border border-border bg-muted/30 overflow-hidden">
               {compositionOptions.map((opt) => (
                 <button

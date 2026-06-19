@@ -1034,6 +1034,7 @@
     "cashFlow": "Flusso di cassa",
     "comingSoon": "(prossimamente)",
     "composition": "Composizione",
+    "asOf": "al {{date}}",
     "evolution": "Evoluzione",
     "income": "Entrate",
     "expenses": "Spese",
