@@ -929,20 +929,20 @@ export default function ReportsPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
         {/* Composition widget — summary ring + ranked, labelled detail bars */}
         <div className={`rounded-xl border shadow-sm transition-colors ${selectedDate ? 'bg-primary/5 border-primary/50' : 'bg-card border-border'}`}>
-          <div className="px-5 pt-4 pb-2 flex items-center justify-between gap-2">
+          <div className="px-5 pt-4 pb-2 flex flex-col gap-2 min-[635px]:flex-row min-[635px]:items-start min-[635px]:justify-between lg:flex-col lg:items-start xl:flex-row xl:items-start xl:justify-between">
             <div className="flex flex-col">
               <p className="text-sm font-semibold text-foreground">{t('reports.composition')}</p>
               {selectedDate && (
                 <span className="text-xs text-primary font-medium">{t('reports.asOf', { date: selectedDate })}</span>
               )}
             </div>
-            <div className="flex items-stretch rounded-lg border border-border bg-muted/30 overflow-hidden">
+            <div className="flex items-stretch rounded-lg border border-border bg-muted/30 overflow-hidden w-fit">
               {compositionOptions.map((opt) => (
                 <button
                   key={opt}
                   type="button"
                   onClick={() => setCompositionView(opt)}
-                  className={`px-2 py-1 text-[11px] font-semibold text-center whitespace-nowrap transition-colors ${
+                  className={`px-2 py-1 text-[11px] font-semibold text-center transition-colors ${
                     compositionView === opt
                       ? 'bg-primary text-primary-foreground'
                       : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
