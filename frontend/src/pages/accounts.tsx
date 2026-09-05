@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getAccountName } from '@/lib/account-utils'
+import { formatAccountMask, getAccountLabel, getAccountName } from '@/lib/account-utils'
 import { getConnectionName } from '@/lib/connection-utils'
 import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import axios from 'axios'
 import { accounts, connections, currencies } from '@/lib/api'
+import { localDateString } from '@/lib/date-utils'
 import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -22,17 +24,10 @@ import { DatePickerInput } from '@/components/ui/date-picker-input'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { Account, BankConnection } from '@/types'
-import {
-  Pencil,
-  Trash2,
-  RefreshCw,
-  Unlink,
-  Plus,
-  Settings,
-  Archive,
-  Layers,
-} from 'lucide-react'
+import { RefreshCw, TriangleAlert, Unlink, Settings } from 'lucide-react'
 import { AccountIcon, ConnectionLogo, getAccountTypeConfig } from '@/components/account-icon'
+import { AccountPageActions } from '@/components/account-page-actions'
+import { AccountRowActions } from '@/components/account-row-actions'
 import { PageHeader } from '@/components/page-header'
 import { BankConnectDialog } from '@/components/bank-connect-dialog'
 import { ConnectorSelectDialog, type Provider } from '@/components/connector-select-dialog'
@@ -42,6 +37,7 @@ import { ConnectionSettingsDialog } from '@/components/connection-settings-dialo
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { useAuth } from '@/contexts/auth-context'
 import { useWorkspace } from '@/contexts/workspace-context'
+import { formatCurrency } from '@/lib/format'
 
 // Account types offered in the create/edit dialog. Shared between the manual
 // type selector and the connected-account override selector so the list stays
@@ -53,10 +49,6 @@ const ACCOUNT_TYPE_OPTIONS = [
   { value: 'investment', labelKey: 'accounts.typeInvestment' },
   { value: 'wallet', labelKey: 'accounts.typeWallet' },
 ] as const
-
-function formatCurrency(value: number, currency = 'USD', locale = 'en-US') {
-  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(value)
-}
 
 function daysUntil(dateStr: string | null): number | null {
   if (!dateStr) return null
@@ -86,6 +78,7 @@ export default function AccountsPage() {
   const [closingAccountId, setClosingAccountId] = useState<string | null>(null)
   const [reconnectConnId, setReconnectConnId] = useState<string | null>(null)
   const [reconnectItemId, setReconnectItemId] = useState<string | null>(null)
+  const [tokenReconnectConnection, setTokenReconnectConnection] = useState<BankConnection | null>(null)
 
   const { data: accountsList, isLoading: accountsLoading } = useQuery({
     queryKey: ['accounts'],
@@ -121,6 +114,10 @@ export default function AccountsPage() {
       }
       return
     }
+    if (providerInfo?.flow_type === 'token') {
+      setTokenReconnectConnection(conn)
+      return
+    }
     // Widget flow (Pluggy): re-open the widget with the existing item_id.
     setReconnectConnId(conn.id)
     setReconnectItemId(conn.external_id)
@@ -143,7 +140,14 @@ export default function AccountsPage() {
         toast.info(t('accounts.mergedCount', { count: merged }))
       }
     },
-    onError: () => toast.error(t('accounts.syncError')),
+    onError: (err) => {
+      queryClient.invalidateQueries({ queryKey: ['connections'] })
+      const detail = axios.isAxiosError(err)
+        ? err.response?.data?.detail
+        : null
+      const message = typeof detail === 'string' ? detail : detail?.message
+      toast.error(message || t('accounts.syncError'))
+    },
   })
 
   const disconnectMutation = useMutation({
@@ -222,24 +226,12 @@ export default function AccountsPage() {
         section={t('accounts.title')}
         title={t('accounts.title')}
         action={
-          <div className="flex gap-2">
-            <Button variant="outline" className="gap-1.5" onClick={() => navigate('/collections')}>
-              <Layers size={16} />
-              {t('collections.title')}
-            </Button>
-            {canWrite && (
-              <>
-                <Button variant="outline" className="gap-1.5" onClick={() => setConnectorSelectOpen(true)}>
-                  <Plus size={16} />
-                  {t('accounts.connectBank')}
-                </Button>
-                <Button onClick={() => { setEditingAccount(null); setDialogOpen(true) }} className="gap-1.5">
-                  <Plus size={16} />
-                  {t('accounts.addManual')}
-                </Button>
-              </>
-            )}
-          </div>
+          <AccountPageActions
+            canWrite={canWrite}
+            onAddAccount={() => { setEditingAccount(null); setDialogOpen(true) }}
+            onConnectBank={() => setConnectorSelectOpen(true)}
+            onOpenCollections={() => navigate('/collections')}
+          />
         }
       />
 
@@ -267,6 +259,7 @@ export default function AccountsPage() {
                       : dueIn === 0 ? t('accounts.dueToday')
                       : t('accounts.dueIn', { count: dueIn })
                   const dueClass = dueIn != null && dueIn <= 3 ? 'text-amber-600' : 'text-muted-foreground'
+                  const accountMask = formatAccountMask(acc)
                   return (
                     <div key={acc.id} className="group flex items-center px-5 py-3 hover:bg-muted/50 transition-colors">
                       <Link to={`/accounts/${acc.id}`} className="flex items-center gap-3 flex-1 min-w-0">
@@ -275,37 +268,12 @@ export default function AccountsPage() {
                           <p className="text-sm font-medium text-foreground truncate">{getAccountName(acc)}</p>
                           <p className="text-xs text-muted-foreground">
                             {t(cfg.label)}
+                            {accountMask && <> · <span className="tabular-nums">{accountMask}</span></>}
                             {dueText && <> · <span className={dueClass}>{dueText}</span></>}
                           </p>
                         </div>
                       </Link>
-                      {canWrite && (
-                        <div className="flex items-center gap-1 mr-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                            onClick={() => { setEditingAccount(acc); setDialogOpen(true) }}
-                            title={t('common.edit')}
-                          >
-                            <Pencil size={13} />
-                          </button>
-                          <button
-                            className="p-1.5 rounded-md text-muted-foreground hover:text-amber-600 hover:bg-amber-50 transition-colors"
-                            onClick={() => setClosingAccountId(acc.id)}
-                            title={t('accounts.close')}
-                          >
-                            <Archive size={13} />
-                          </button>
-                          <button
-                            className="p-1.5 rounded-md text-muted-foreground hover:text-rose-500 hover:bg-rose-50 transition-colors"
-                            onClick={() => setDeletingId(acc.id)}
-                            disabled={deleteMutation.isPending}
-                            title={t('common.delete')}
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      )}
-                      <div className="text-right">
+                      <div className="shrink-0 text-right">
                         <p className={`text-xs sm:text-sm font-semibold tabular-nums ${(acc.type === 'credit_card' ? bal > 0 : bal < 0) ? 'text-rose-500' : 'text-foreground'}`}>
                           {mask(formatCurrency(bal, acc.currency, locale))}
                         </p>
@@ -319,6 +287,15 @@ export default function AccountsPage() {
                           </p>
                         )}
                       </div>
+                      {canWrite && (
+                        <AccountRowActions
+                          accountName={getAccountName(acc)}
+                          onEdit={() => { setEditingAccount(acc); setDialogOpen(true) }}
+                          onClose={() => setClosingAccountId(acc.id)}
+                          onDelete={() => setDeletingId(acc.id)}
+                          deletePending={deleteMutation.isPending}
+                        />
+                      )}
                     </div>
                   )
                 })}
@@ -335,18 +312,28 @@ export default function AccountsPage() {
             <div className="space-y-3">
               {connectionsList.map((conn) => {
                 const connAccounts = bankAccounts.filter((a) => a.connection_id === conn.id)
+                const needsReconnect = conn.status !== 'active'
+                const syncPending = syncMutation.isPending && syncMutation.variables === conn.id
                 return (
                   <div key={conn.id} className="bg-card rounded-xl border border-border shadow-sm">
                     {/* Connection header */}
                     <div className="flex items-center justify-between px-5 py-3.5 border-b border-border">
                       <div className="flex items-center gap-3">
-                        <ConnectionLogo logoUrl={conn.logo_url} />
+                        {/* One bank's favicon would misrepresent a multi-
+                            institution link — fall back to the generic icon. */}
+                        <ConnectionLogo
+                          logoUrl={(conn.institutions?.length ?? 0) > 1 ? null : conn.logo_url}
+                        />
                         <div>
                           <div className="flex items-center gap-2">
-                            <p className="text-sm font-semibold text-foreground">{getConnectionName(conn)}</p>
+                            <p className="text-sm font-semibold text-foreground">{getConnectionName(conn, t)}</p>
                             <Badge
                               variant={conn.status === 'active' ? 'default' : 'secondary'}
-                              className="text-[10px] px-1.5 py-0 h-4"
+                              className={
+                                conn.status === 'active'
+                                  ? 'text-[10px] px-1.5 py-0 h-4'
+                                  : 'text-[10px] px-1.5 py-0 h-4 border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                              }
                             >
                               {conn.status}
                             </Badge>
@@ -365,17 +352,32 @@ export default function AccountsPage() {
                             size="sm"
                             className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
                             onClick={() => setSettingsConnection(conn)}
+                            title={t('connections.settings')}
                           >
                             <Settings size={14} />
                           </Button>
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
-                            onClick={() => syncMutation.mutate(conn.id)}
-                            disabled={syncMutation.isPending}
+                            className={needsReconnect
+                              ? 'relative h-8 w-8 p-0 text-amber-500 hover:bg-amber-500/10 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300'
+                              : 'h-8 w-8 p-0 text-muted-foreground hover:text-foreground'}
+                            onClick={() => needsReconnect ? handleReconnectClick(conn) : syncMutation.mutate(conn.id)}
+                            disabled={syncPending}
+                            title={needsReconnect
+                              ? conn.status === 'expired'
+                                ? t('accounts.connectionExpired')
+                                : t('accounts.connectionError')
+                              : t('accounts.sync')}
+                            aria-label={needsReconnect ? t('accounts.reconnect') : t('accounts.sync')}
                           >
-                            <RefreshCw size={14} className={syncMutation.isPending ? 'animate-spin' : ''} />
+                            <RefreshCw size={14} className={syncPending ? 'animate-spin' : ''} />
+                            {needsReconnect && (
+                              <TriangleAlert
+                                size={10}
+                                className="absolute -right-0.5 -top-0.5 rounded-full bg-card text-amber-500"
+                              />
+                            )}
                           </Button>
                           <Button
                             variant="ghost"
@@ -383,33 +385,13 @@ export default function AccountsPage() {
                             className="h-8 w-8 p-0 text-muted-foreground hover:text-rose-500"
                             onClick={() => setDisconnectingConnection(conn)}
                             disabled={disconnectMutation.isPending}
+                            title={t('accounts.disconnect')}
                           >
                             <Unlink size={14} />
                           </Button>
                         </div>
                       )}
                     </div>
-                    {/* Reconnect banner */}
-                    {conn.status !== 'active' && (
-                      <div className="mx-5 mt-3 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5">
-                        <span className="text-sm text-amber-800">
-                          {conn.status === 'expired'
-                            ? t('accounts.connectionExpired')
-                            : t('accounts.connectionError')}
-                        </span>
-                        {canWrite && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="border-amber-300 text-amber-700 hover:bg-amber-100 gap-1.5 h-8"
-                            onClick={() => handleReconnectClick(conn)}
-                          >
-                            <RefreshCw size={12} />
-                            {t('accounts.reconnect')}
-                          </Button>
-                        )}
-                      </div>
-                    )}
                     {/* Accounts list */}
                     {connAccounts.length > 0 ? (
                       <div className="divide-y divide-muted">
@@ -424,6 +406,7 @@ export default function AccountsPage() {
                               : dueIn === 0 ? t('accounts.dueToday')
                               : t('accounts.dueIn', { count: dueIn })
                           const dueClass = dueIn != null && dueIn <= 3 ? 'text-amber-600' : 'text-muted-foreground'
+                          const accountMask = formatAccountMask(acc)
                           return (
                             <div key={acc.id} className="group flex items-center px-5 py-3 hover:bg-muted/50 transition-colors">
                               <Link to={`/accounts/${acc.id}`} className="flex items-center gap-3 flex-1 min-w-0">
@@ -432,29 +415,12 @@ export default function AccountsPage() {
                                   <p className="text-sm font-medium text-foreground truncate">{getAccountName(acc)}</p>
                                   <p className="text-xs text-muted-foreground">
                                     {t(cfg.label)}
+                                    {accountMask && <> · <span className="tabular-nums">{accountMask}</span></>}
                                     {dueText && <> · <span className={dueClass}>{dueText}</span></>}
                                   </p>
                                 </div>
                               </Link>
-                              {canWrite && (
-                                <div className="flex items-center gap-1 mr-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                                  <button
-                                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                                    onClick={(e) => { e.preventDefault(); setEditingAccount(acc); setDialogOpen(true) }}
-                                    title={t('common.edit')}
-                                  >
-                                    <Pencil size={13} />
-                                  </button>
-                                  <button
-                                    className="p-1.5 rounded-md text-muted-foreground hover:text-amber-600 hover:bg-amber-50 transition-colors"
-                                    onClick={(e) => { e.preventDefault(); setClosingAccountId(acc.id) }}
-                                    title={t('accounts.close')}
-                                  >
-                                    <Archive size={13} />
-                                  </button>
-                                </div>
-                              )}
-                              <div className="text-right">
+                              <div className="shrink-0 text-right">
                                 <p className={`text-xs sm:text-sm font-semibold tabular-nums ${(acc.type === 'credit_card' ? bal > 0 : bal < 0) ? 'text-rose-500' : 'text-foreground'}`}>
                                   {mask(formatCurrency(bal, acc.currency, locale))}
                                 </p>
@@ -468,6 +434,14 @@ export default function AccountsPage() {
                                   </p>
                                 )}
                               </div>
+                              {canWrite && (
+                                <AccountRowActions
+                                  accountName={getAccountName(acc)}
+                                  onEdit={() => { setEditingAccount(acc); setDialogOpen(true) }}
+                                  onClose={() => setClosingAccountId(acc.id)}
+                                  deletePending={deleteMutation.isPending}
+                                />
+                              )}
                             </div>
                           )
                         })}
@@ -499,7 +473,7 @@ export default function AccountsPage() {
                     <div key={acc.id} className="flex items-center px-5 py-3">
                       <div className="flex items-center gap-3 flex-1 min-w-0">
                         <AccountIcon account={acc} />
-                        <p className="text-sm font-medium text-muted-foreground truncate">{getAccountName(acc)}</p>
+                        <p className="text-sm font-medium text-muted-foreground truncate">{getAccountLabel(acc)}</p>
                       </div>
                       {canWrite && (
                         <Button
@@ -555,7 +529,7 @@ export default function AccountsPage() {
             <DialogTitle>{t('accounts.confirmDisconnectTitle')}</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            {t('accounts.confirmDisconnectDesc', { institution: disconnectingConnection ? getConnectionName(disconnectingConnection) : '' })}
+            {t('accounts.confirmDisconnectDesc', { institution: disconnectingConnection ? getConnectionName(disconnectingConnection, t) : '' })}
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDisconnectingConnection(null)}>
@@ -613,6 +587,7 @@ export default function AccountsPage() {
         open={!!selectedProvider && selectedProvider.flow_type === 'widget'}
         onClose={() => setSelectedProvider(null)}
         provider={selectedProvider?.name}
+        supportsAssetSync={selectedProvider?.supports_asset_sync ?? false}
       />
 
       {/* OAuth Connect Dialog — institution-pickers (Enable Banking) */}
@@ -620,6 +595,7 @@ export default function AccountsPage() {
         open={!!selectedProvider && selectedProvider.flow_type === 'oauth'}
         onClose={() => setSelectedProvider(null)}
         provider={selectedProvider?.name ?? ''}
+        supportsAssetSync={selectedProvider?.supports_asset_sync ?? false}
       />
 
       {/* Token Connect Dialog — paste-a-token flow (SimpleFIN) */}
@@ -627,9 +603,10 @@ export default function AccountsPage() {
         open={!!selectedProvider && selectedProvider.flow_type === 'token'}
         onClose={() => setSelectedProvider(null)}
         provider={selectedProvider?.name ?? ''}
+        supportsAssetSync={selectedProvider?.supports_asset_sync ?? false}
       />
 
-      {/* Reconnect Dialog */}
+      {/* Reconnect Dialog — widget-based (Pluggy) */}
       <BankConnectDialog
         open={!!reconnectConnId}
         onClose={() => { setReconnectConnId(null); setReconnectItemId(null) }}
@@ -637,11 +614,24 @@ export default function AccountsPage() {
         updateItemId={reconnectItemId ?? undefined}
       />
 
+      {/* Reconnect Dialog — paste-a-token flow (SimpleFIN) */}
+      <TokenConnectDialog
+        open={!!tokenReconnectConnection}
+        onClose={() => setTokenReconnectConnection(null)}
+        provider={tokenReconnectConnection?.provider ?? ''}
+        reconnectConnectionId={tokenReconnectConnection?.id}
+      />
+
       {/* Connection Settings Dialog */}
       <ConnectionSettingsDialog
         open={!!settingsConnection}
         onClose={() => setSettingsConnection(null)}
         connection={settingsConnection}
+        supportsAssetSync={
+          settingsConnection
+            ? providersByName.get(settingsConnection.provider)?.supports_asset_sync ?? false
+            : false
+        }
       />
 
       {/* Account Dialog */}
@@ -698,7 +688,7 @@ function AccountDialog({
   const [type, setType] = useState(account?.type ?? 'checking')
   const [balance, setBalance] = useState(account?.balance?.toString() ?? '0')
   const [currency, setCurrency] = useState(account?.currency ?? userCurrency)
-  const [balanceDate, setBalanceDate] = useState(new Date().toISOString().slice(0, 10))
+  const [balanceDate, setBalanceDate] = useState(localDateString)
   const [creditLimit, setCreditLimit] = useState(account?.credit_limit?.toString() ?? '')
   const [statementCloseDay, setStatementCloseDay] = useState(account?.statement_close_day?.toString() ?? '')
   const [paymentDueDay, setPaymentDueDay] = useState(account?.payment_due_day?.toString() ?? '')
@@ -709,7 +699,7 @@ function AccountDialog({
     setType(account?.type ?? 'checking')
     setBalance(account?.balance?.toString() ?? '0')
     setCurrency(account?.currency ?? userCurrency)
-    setBalanceDate(new Date().toISOString().slice(0, 10))
+    setBalanceDate(localDateString())
     setCreditLimit(account?.credit_limit?.toString() ?? '')
     setStatementCloseDay(account?.statement_close_day?.toString() ?? '')
     setPaymentDueDay(account?.payment_due_day?.toString() ?? '')

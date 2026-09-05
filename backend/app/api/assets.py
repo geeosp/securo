@@ -1,8 +1,10 @@
+import json
 import logging
 import uuid
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import current_active_user
@@ -17,6 +19,11 @@ from app.providers.market_price import (
     MarketPriceRateLimitedError,
     get_market_price_provider,
 )
+from app.schemas.asset_import import (
+    AssetImportPreview,
+    AssetImportRequest,
+    AssetImportResult,
+)
 from app.schemas.asset import (
     AssetBuyCreate,
     AssetCreate,
@@ -30,7 +37,7 @@ from app.schemas.asset import (
     MarketSymbolMatch,
     MarketSymbolQuote,
 )
-from app.services import asset_service, asset_transaction_service
+from app.services import asset_import_service, asset_service, asset_transaction_service
 from app.services.fx_rate_service import convert
 
 logger = logging.getLogger(__name__)
@@ -51,7 +58,9 @@ router = APIRouter(prefix="/api/assets", tags=["assets"])
 @router.get("/market/search", response_model=list[MarketSymbolMatch])
 async def market_search(
     q: str = Query(..., min_length=1, max_length=64, description="Ticker or company name"),
-    limit: int = Query(15, ge=1, le=30),
+    # Upper bound is generous so the Tesouro Direto dropdown can list every
+    # open bond (~60 and growing); ticker autocomplete still requests ~15.
+    limit: int = Query(15, ge=1, le=300),
     _: User = Depends(current_active_user),
 ) -> list[MarketSymbolMatch]:
     """Autocomplete ticker symbols for the Add-Asset form.
@@ -95,6 +104,8 @@ async def market_quote(
     return quote
 
 
+
+
 @router.post("/{asset_id}/refresh-price", response_model=AssetRead)
 async def refresh_asset_price(
     asset_id: uuid.UUID,
@@ -122,7 +133,7 @@ async def refresh_asset_price(
     if asset.valuation_method != "market_price":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Only market-priced assets can be refreshed via this endpoint",
+            detail="Only externally priced assets can be refreshed via this endpoint",
         )
 
     try:
@@ -135,7 +146,7 @@ async def refresh_asset_price(
     if not ok:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Could not refresh quote for {asset.ticker}",
+            detail="Could not refresh price for this asset",
         )
     await session.commit()
 
@@ -210,6 +221,99 @@ async def list_workspace_transactions(
     return await asset_transaction_service.list_workspace_transactions(
         session, ctx.workspace.id, ticker=ticker, kind=kind, limit=limit
     )
+
+
+@router.get("/import/template")
+async def asset_import_template(
+    ctx: WorkspaceContext = Depends(current_workspace),
+):
+    """A starter CSV, so the first upload is a fill-in rather than a guess."""
+    return Response(
+        content=asset_import_service.csv_template(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="securo-asset-orders.csv"'},
+    )
+
+
+@router.post("/import/preview", response_model=AssetImportPreview)
+async def preview_asset_import(
+    file: UploadFile = File(...),
+    column_mapping: str | None = Form(None),
+    date_format: str | None = Form(None),
+    group_id: uuid.UUID | None = Form(None),
+    ctx: WorkspaceContext = Depends(current_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Read the file and say what importing it would do. Writes nothing.
+
+    Read-gated on purpose, like the transaction preview: a viewer may look at
+    a file without being able to commit it.
+    """
+    content = await file.read()
+    mapping = None
+    if column_mapping:
+        try:
+            mapping = json.loads(column_mapping)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="column_mapping must be valid JSON")
+
+    try:
+        orders, errors, columns = asset_import_service.parse_orders_csv(
+            content, column_mapping=mapping, date_format=date_format
+        )
+    except ValueError as exc:
+        # Soft failure: hand back the headers so the UI can offer the mapping
+        # dropdowns instead of a dead end.
+        return AssetImportPreview(
+            orders=[],
+            errors=[],
+            csv_columns=asset_import_service.detect_columns(content),
+            parse_error=str(exc),
+        )
+
+    try:
+        summary = await asset_import_service.import_orders(
+            session, ctx.workspace.id, ctx.user_id, orders, group_id=group_id, dry_run=True
+        )
+    except MarketPriceRateLimitedError:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Market data provider is currently rate-limiting. Try again in a minute.",
+        )
+
+    # The dry run rejects rows the parser could not know about — an unknown
+    # ticker, a sell with nothing to sell. Drop those from the list too, so the
+    # table, the count and the button all describe the same import.
+    rejected = {e.row for e in summary["errors"]}
+    return AssetImportPreview(
+        orders=[o for o in orders if o.row not in rejected],
+        errors=errors + summary["errors"],
+        warnings=summary["warnings"],
+        csv_columns=columns,
+        holdings_created=summary["holdings_created"],
+        holdings_matched=summary["holdings_matched"],
+        skipped=summary["skipped"],
+    )
+
+
+@router.post("/import", response_model=AssetImportResult)
+async def import_asset_orders(
+    data: AssetImportRequest,
+    ctx: WorkspaceContext = Depends(current_writable_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Apply the previewed orders to the workspace's holdings."""
+    try:
+        summary = await asset_import_service.import_orders(
+            session, ctx.workspace.id, ctx.user_id, data.orders,
+            group_id=data.group_id, filename=data.filename,
+        )
+    except MarketPriceRateLimitedError:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Market data provider is currently rate-limiting. Try again in a minute.",
+        )
+    return AssetImportResult(**summary)
 
 
 @router.post("/buy", response_model=AssetRead, status_code=status.HTTP_201_CREATED)

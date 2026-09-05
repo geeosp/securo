@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -31,6 +32,10 @@ from app.api.currencies import router as currencies_router
 from app.api.export import router as export_router
 from app.api.fx_rates import router as fx_rates_router
 from app.api.attachments import router as attachments_router
+from app.api.fiscal import router as fiscal_router
+from app.api.invoice_attachments import router as invoice_attachments_router
+from app.api.invoices import router as invoices_router
+from app.api.public_invoices import router as public_invoices_router
 from app.api.payees import router as payees_router
 from app.api.settings import router as settings_router
 from app.api.transactions import router as transactions_router
@@ -39,6 +44,7 @@ from app.api.user_lookup import router as user_lookup_router
 from app.api.workspaces import router as workspaces_router
 from app.api.admin import router as admin_router, check_registration_enabled
 from app.core.auth import fastapi_users
+from app.core.auth_policy import require_local_auth_enabled
 from app.core.config import get_settings
 from app.core.rate_limit import login_rate_limit, register_rate_limit, password_reset_rate_limit
 from app.core.redis import close_redis
@@ -46,6 +52,37 @@ from app.schemas.user import UserCreate, UserRead, UserUpdate
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+async def _warm_tesouro_cache() -> None:
+    """Pre-load the Tesouro Direto price cache so the first bond search is
+    instant instead of waiting on the cold ~25s CSV download.
+
+    Gated to instances that actually serve Brazilian users (a workspace with
+    BRL as its default currency) so a non-Brazilian deployment never calls the
+    Brazilian government endpoint just because the feature ships on by default.
+    """
+    try:
+        if not get_settings().tesouro_direto_enabled:
+            return
+        from sqlalchemy import select
+
+        from app.core.database import async_session_maker
+        from app.models.workspace import Workspace
+
+        async with async_session_maker() as session:
+            has_brl = await session.scalar(
+                select(Workspace.id).where(Workspace.default_currency == "BRL").limit(1)
+            )
+        if not has_brl:
+            return
+
+        from app.providers.tesouro_direto import get_tesouro_direto_provider
+
+        await get_tesouro_direto_provider().get_available_bonds()
+        logger.info("Startup: warmed Tesouro Direto price cache")
+    except Exception:
+        logger.exception("Startup: Tesouro Direto cache warm failed")
 
 
 @asynccontextmanager
@@ -58,6 +95,9 @@ async def lifespan(app: FastAPI):
         logger.info("Startup: dispatched sync_all_connections task to Celery")
     except Exception:
         logger.exception("Startup: failed to dispatch sync task")
+    # Background pre-warm of the Tesouro cache (non-blocking; gated to BRL
+    # instances inside the helper). Kept on app.state so it isn't GC'd.
+    app.state.tesouro_warm_task = asyncio.create_task(_warm_tesouro_cache())
     yield
     # Shutdown
     await close_redis()
@@ -100,13 +140,17 @@ app.include_router(
     fastapi_users.get_register_router(UserRead, UserCreate),
     prefix="/api/auth",
     tags=["auth"],
-    dependencies=[Depends(check_registration_enabled), Depends(register_rate_limit)],
+    dependencies=[
+        Depends(require_local_auth_enabled),
+        Depends(check_registration_enabled),
+        Depends(register_rate_limit),
+    ],
 )
 app.include_router(
     fastapi_users.get_reset_password_router(),
     prefix="/api/auth",
     tags=["auth"],
-    dependencies=[Depends(password_reset_rate_limit)],
+    dependencies=[Depends(require_local_auth_enabled), Depends(password_reset_rate_limit)],
 )
 # user_lookup must precede the fastapi-users router below so the
 # `/api/users/lookup` path isn't captured by the catch-all `/{id}`
@@ -142,7 +186,11 @@ app.include_router(currencies_router)
 app.include_router(fx_rates_router)
 app.include_router(export_router)
 app.include_router(attachments_router)
+app.include_router(fiscal_router)
 app.include_router(payees_router)
+app.include_router(invoices_router)
+app.include_router(invoice_attachments_router)
+app.include_router(public_invoices_router)
 app.include_router(settings_router)
 app.include_router(workspaces_router)
 app.include_router(admin_router)

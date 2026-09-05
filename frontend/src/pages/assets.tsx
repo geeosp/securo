@@ -4,6 +4,7 @@ import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useRegisterPageChatContext } from '@/lib/page-chat-context'
 import { assets, assetGroups, currencies as currenciesApi } from '@/lib/api'
+import { localDateString } from '@/lib/date-utils'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -39,6 +40,7 @@ import {
   Bitcoin,
   PieChart,
   AlertTriangle,
+  Upload,
 } from 'lucide-react'
 import {
   AreaChart,
@@ -49,19 +51,13 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from 'recharts'
+import { useNavigate } from 'react-router-dom'
 import { PageHeader } from '@/components/page-header'
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { useAuth } from '@/contexts/auth-context'
 import { useWorkspace } from '@/contexts/workspace-context'
 import { useCollectionFilter } from '@/contexts/collection-filter-context'
-
-function formatCurrency(value: number, currency = 'USD', locale = 'en-US') {
-  try {
-    return new Intl.NumberFormat(locale, { style: 'currency', currency: currency || 'USD' }).format(value)
-  } catch {
-    return new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD' }).format(value)
-  }
-}
+import { formatCurrency } from '@/lib/format'
 
 // Renders a logo image when one is available, falling back to the asset's
 // type-based Lucide icon on missing URL or broken image. Uses the type's
@@ -189,6 +185,7 @@ function assetErrorMessage(e: unknown, fallback: string): string {
 
 export default function AssetsPage() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const locale = useDisplayLocale()
   const dateLocale = useDateLocale()
   const { mask } = usePrivacyMode()
@@ -570,6 +567,7 @@ export default function AssetsPage() {
     setTickerSearchLoading(false)
   }
 
+
   function openCreate() {
     setEditingAsset(null)
     setFormName('')
@@ -661,6 +659,7 @@ export default function AssetsPage() {
       }
     }
 
+
     if (!editingAsset && formCurrentValue) {
       payload.current_value = parseFloat(formCurrentValue)
     }
@@ -738,7 +737,7 @@ export default function AssetsPage() {
             <AssetIcon logoUrl={asset.logo_url} Icon={Icon} colorClass={config.color} bgClass={config.bg} size={16} tile="w-8 h-8" />
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
-                <span className="font-semibold text-foreground truncate">{asset.ticker || asset.name}</span>
+                <span className="font-semibold text-foreground truncate">{asset.ticker && !asset.ticker.startsWith('TD:') ? asset.ticker : asset.name}</span>
                 {needsBuys && (
                   <Badge
                     variant="outline"
@@ -756,7 +755,7 @@ export default function AssetsPage() {
                   <Badge variant="outline" className="text-[9px] px-1 py-0 text-sky-600 border-sky-200">{t('assets.synced')}</Badge>
                 )}
               </div>
-              <span className="text-[11px] text-muted-foreground truncate block">{asset.ticker ? asset.name : t(`assets.type${asset.type.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()).replace(/^./, c => c.toUpperCase())}`)}</span>
+              <span className="text-[11px] text-muted-foreground truncate block">{asset.ticker && !asset.ticker.startsWith('TD:') ? asset.name : (asset.ticker?.startsWith('TD:') ? 'Tesouro Direto' : t(`assets.type${asset.type.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()).replace(/^./, c => c.toUpperCase())}`))}</span>
             </div>
           </div>
           {/* Quant. */}
@@ -810,10 +809,10 @@ export default function AssetsPage() {
                 <button onClick={(e) => { e.stopPropagation(); setMovingAsset(asset) }} title={t('assets.moveToWallet')} className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
                   <FolderInput size={13} />
                 </button>
-                <button onClick={(e) => { e.stopPropagation(); if (!isProviderOwned) openEdit(asset) }} disabled={isProviderOwned} title={isProviderOwned ? t('assets.syncedReadOnly') : undefined} className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+                <button onClick={(e) => { e.stopPropagation(); if (!isProviderOwned) openEdit(asset) }} disabled={isProviderOwned} title={isProviderOwned ? t('assets.syncedReadOnly') : t('common.edit')} className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
                   <Pencil size={13} />
                 </button>
-                <button onClick={(e) => { e.stopPropagation(); if (!isProviderOwned) setDeletingId(asset.id) }} disabled={isProviderOwned} title={isProviderOwned ? t('assets.syncedReadOnly') : undefined} className="p-1 rounded text-muted-foreground hover:text-rose-600 hover:bg-rose-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+                <button onClick={(e) => { e.stopPropagation(); if (!isProviderOwned) setDeletingId(asset.id) }} disabled={isProviderOwned} title={isProviderOwned ? t('assets.syncedReadOnly') : t('common.delete')} className="p-1 rounded text-muted-foreground hover:text-rose-600 hover:bg-rose-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
                   <Trash2 size={13} />
                 </button>
               </>
@@ -1022,6 +1021,10 @@ export default function AssetsPage() {
         action={
           canWrite ? (
             <div className="flex items-center gap-2">
+              <Button onClick={() => navigate('/import?tab=investments')} variant="outline" className="gap-1.5">
+                <Upload size={16} />
+                {t('assetImport.action')}
+              </Button>
               <Button onClick={openCreateWallet} variant="outline" className="gap-1.5">
                 <Wallet size={16} />
                 {t('assets.newWallet')}
@@ -1063,7 +1066,7 @@ export default function AssetsPage() {
         />
       ) : (
       <>
-      {/* Portfolio Stacked Area Chart */}
+      {/* Portfolio Chart */}
       {portfolioData && portfolioData.trend.length > 0 && (
         <PortfolioChart
           data={portfolioData}
@@ -1195,7 +1198,7 @@ export default function AssetsPage() {
             {/* Valuation Method — locked on edit */}
             <div className="space-y-2">
               <Label>{t('assets.valuationMethod')}</Label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid gap-2 grid-cols-3">
                 {VALUATION_METHODS.map(m => (
                   <button
                     key={m}
@@ -1240,7 +1243,11 @@ export default function AssetsPage() {
                     />
                     {tickerMatches.length > 0 && !editingAsset && (
                       <div className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto rounded-lg border border-border bg-popover shadow-lg">
-                        {tickerMatches.map(match => (
+                        {tickerMatches.map(match => {
+                          // Tesouro bonds carry an internal TD:* symbol — show
+                          // the readable name instead of the hash for those.
+                          const isBond = match.symbol.startsWith('TD:')
+                          return (
                           <button
                             key={`${match.symbol}-${match.exchange ?? ''}`}
                             type="button"
@@ -1248,16 +1255,17 @@ export default function AssetsPage() {
                             className="flex flex-col w-full text-left px-3 py-2 hover:bg-muted transition-colors"
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <span className="font-semibold text-sm">{match.symbol}</span>
+                              <span className="font-semibold text-sm truncate">{isBond ? (match.name ?? match.symbol) : match.symbol}</span>
                               {match.exchange && (
-                                <span className="text-xs text-muted-foreground">{match.exchange}</span>
+                                <span className="text-xs text-muted-foreground shrink-0">{match.exchange}</span>
                               )}
                             </div>
-                            {match.name && (
+                            {match.name && !isBond && (
                               <span className="text-xs text-muted-foreground truncate">{match.name}</span>
                             )}
                           </button>
-                        ))}
+                          )
+                        })}
                       </div>
                     )}
                     {tickerSearchLoading && (
@@ -1272,8 +1280,8 @@ export default function AssetsPage() {
                   <div className="rounded-lg border border-border bg-card p-3 text-sm">
                     <div className="flex items-center justify-between">
                       <div className="flex flex-col min-w-0">
-                        <span className="font-semibold">{selectedQuote.symbol}</span>
-                        {selectedQuote.name && (
+                        <span className="font-semibold truncate">{selectedQuote.symbol.startsWith('TD:') ? (selectedQuote.name ?? selectedQuote.symbol) : selectedQuote.symbol}</span>
+                        {selectedQuote.name && !selectedQuote.symbol.startsWith('TD:') && (
                           <span className="text-xs text-muted-foreground truncate">{selectedQuote.name}</span>
                         )}
                         {/* Staleness hint — only meaningful when editing an
@@ -1372,6 +1380,7 @@ export default function AssetsPage() {
                 )}
               </div>
             )}
+
 
             {/* Growth Rule Settings */}
             {formMethod === 'growth_rule' && (
@@ -1690,8 +1699,13 @@ function PortfolioChart({ data, wallets, currency, locale: loc, dateLocale: date
 }) {
   const { t } = useTranslation()
   // Default to wallet mode: with many synced CDBs the asset view turns
-  // into a cluttered rainbow legend that's hard to parse.
+  // into a cluttered rainbow legend that's hard to parse. Keep stacked as
+  // the default drawing style, while letting users switch to true lines when
+  // they need to compare each wallet/asset's own value instead of the running
+  // cumulative total.
   const [mode, setMode] = useState<'wallet' | 'asset'>('wallet')
+  const [drawMode, setDrawMode] = useState<'stacked' | 'lines'>('stacked')
+  const isStacked = drawMode === 'stacked'
 
   const formatCompact = (v: number) => {
     const abs = Math.abs(v)
@@ -1785,25 +1799,49 @@ function PortfolioChart({ data, wallets, currency, locale: loc, dateLocale: date
 
   return (
     <div className="border border-border rounded-xl bg-card shadow-sm p-5">
-      <div className="flex items-center justify-between mb-4 gap-4">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-2">
           <h3 className="text-sm font-semibold text-foreground">{t('assets.portfolioValue')}</h3>
-          <div className="inline-flex items-center rounded-lg border border-border p-0.5 bg-muted/40">
-            <button
-              onClick={() => setMode('wallet')}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${mode === 'wallet' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-            >
-              {t('assets.chartByWallet')}
-            </button>
-            <button
-              onClick={() => setMode('asset')}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${mode === 'asset' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-            >
-              {t('assets.chartByAsset')}
-            </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <div role="group" aria-label={t('assets.chartGroupMode')} className="inline-flex items-center rounded-lg border border-border p-0.5 bg-muted/40">
+              <button
+                type="button"
+                aria-pressed={mode === 'wallet'}
+                onClick={() => setMode('wallet')}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${mode === 'wallet' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                {t('assets.chartByWallet')}
+              </button>
+              <button
+                type="button"
+                aria-pressed={mode === 'asset'}
+                onClick={() => setMode('asset')}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${mode === 'asset' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                {t('assets.chartByAsset')}
+              </button>
+            </div>
+            <div role="group" aria-label={t('assets.chartDrawMode')} className="inline-flex items-center rounded-lg border border-border p-0.5 bg-muted/40">
+              <button
+                type="button"
+                aria-pressed={drawMode === 'stacked'}
+                onClick={() => setDrawMode('stacked')}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${drawMode === 'stacked' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                {t('assets.chartStacked')}
+              </button>
+              <button
+                type="button"
+                aria-pressed={drawMode === 'lines'}
+                onClick={() => setDrawMode('lines')}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${drawMode === 'lines' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                {t('assets.chartLines')}
+              </button>
+            </div>
           </div>
         </div>
-        <div className="text-right">
+        <div className="text-left sm:text-right">
           <span className="text-xs text-muted-foreground">{t('assets.total')}</span>
           <p className="text-lg font-bold tabular-nums text-foreground">
             {mask(formatCurrency(data.total, currency, loc))}
@@ -1814,7 +1852,7 @@ function PortfolioChart({ data, wallets, currency, locale: loc, dateLocale: date
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={displayTrend} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
             <defs>
-              {sortedSeries.map(s => (
+              {isStacked && sortedSeries.map(s => (
                 <linearGradient key={s.key} id={`portfolio-grad-${s.key}`} x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={s.color} stopOpacity={0.5} />
                   <stop offset="100%" stopColor={s.color} stopOpacity={0.1} />
@@ -1870,22 +1908,24 @@ function PortfolioChart({ data, wallets, currency, locale: loc, dateLocale: date
                 )
               }}
             />
-            {/* Stacked areas — one colored band per series */}
+            {/* Stacked mode shows cumulative bands; line mode plots each series' own value. */}
             {sortedSeries.map(s => (
               <Area
                 key={s.key}
                 type="monotone"
                 dataKey={s.key}
-                stackId="portfolio"
+                stackId={isStacked ? 'portfolio' : undefined}
                 stroke={s.color}
-                strokeWidth={1}
-                fill={`url(#portfolio-grad-${s.key})`}
+                strokeWidth={isStacked ? 1 : 2}
+                fill={isStacked ? `url(#portfolio-grad-${s.key})` : 'none'}
                 dot={false}
                 activeDot={{ r: 3, strokeWidth: 1.5, fill: 'var(--card)' }}
               />
             ))}
-            {/* Hidden total for tooltip */}
-            <Area dataKey="_total" stroke="none" fill="none" dot={false} activeDot={false} />
+            {/* Hidden total for tooltip. Kept out of the chart in line mode so the
+                Y axis scales to the largest single series instead of the portfolio
+                total, which would otherwise squash every line against the baseline. */}
+            <Area dataKey="_total" stroke="none" fill="none" dot={false} activeDot={false} hide={!isStacked} />
           </AreaChart>
         </ResponsiveContainer>
       </div>
@@ -1934,7 +1974,7 @@ function AssetDetail({ assetId, currency, locale: loc, dateLocale: dateLoc, purc
   const queryClient = useQueryClient()
 
   const [valueAmount, setValueAmount] = useState('')
-  const [valueDate, setValueDate] = useState(new Date().toISOString().slice(0, 10))
+  const [valueDate, setValueDate] = useState(localDateString)
 
   const { data: values, isLoading: valuesLoading } = useQuery({
     queryKey: ['asset-values', assetId],
@@ -2187,6 +2227,7 @@ function AssetDetail({ assetId, currency, locale: loc, dateLocale: dateLoc, purc
                         onClick={() => deleteValueMutation.mutate(v.id)}
                         className="p-1 rounded text-muted-foreground/40 hover:text-rose-600 transition-colors"
                         disabled={deleteValueMutation.isPending}
+                        title={t('common.delete')}
                       >
                         <Trash2 size={12} />
                       </button>
@@ -2256,7 +2297,7 @@ function AssetTransactionsTab({
   const [formQuantity, setFormQuantity] = useState('')
   const [formPrice, setFormPrice] = useState('')
   const [formFee, setFormFee] = useState('')
-  const [formDate, setFormDate] = useState<string>(new Date().toISOString().slice(0, 10))
+  const [formDate, setFormDate] = useState<string>(localDateString)
 
   function afterChange() {
     queryClient.refetchQueries({ queryKey: ['asset-transactions'] })
@@ -2317,7 +2358,7 @@ function AssetTransactionsTab({
     setFormQuantity('')
     setFormPrice('')
     setFormFee('')
-    setFormDate(new Date().toISOString().slice(0, 10))
+    setFormDate(localDateString())
     setDialogOpen(true)
   }
 
@@ -2341,7 +2382,7 @@ function AssetTransactionsTab({
     setFormQuantity('')
     setFormPrice('')
     setFormFee('')
-    setFormDate(new Date().toISOString().slice(0, 10))
+    setFormDate(localDateString())
     setDialogOpen(true)
   }
 
@@ -2689,6 +2730,7 @@ function HoldingLedger({
                   onClick={() => deleteMutation.mutate(tx.id)}
                   disabled={deleteMutation.isPending}
                   className="p-1 rounded text-muted-foreground/50 hover:text-rose-600 transition-colors"
+                  title={t('common.delete')}
                 >
                   <Trash2 size={12} />
                 </button>
@@ -2722,7 +2764,7 @@ function AddHoldingTransactionDialog({
   const [quantity, setQuantity] = useState('')
   const [price, setPrice] = useState('')
   const [fee, setFee] = useState('')
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [date, setDate] = useState(localDateString)
 
   useEffect(() => {
     if (assetId) {
@@ -2730,7 +2772,7 @@ function AddHoldingTransactionDialog({
       setQuantity('')
       setPrice('')
       setFee('')
-      setDate(new Date().toISOString().slice(0, 10))
+      setDate(localDateString())
     }
   }, [assetId])
 

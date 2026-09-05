@@ -4,6 +4,7 @@ import json
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from pydantic import SecretStr
 from httpx import AsyncClient
 from sqlalchemy import select
 
@@ -35,7 +36,7 @@ def oidc_settings(monkeypatch):
     settings.oidc_provider_name = "Pocket ID"
     settings.oidc_discovery_url = "https://id.example.com/.well-known/openid-configuration"
     settings.oidc_client_id = "securo"
-    settings.oidc_client_secret = "secret"
+    settings.oidc_client_secret = SecretStr("secret")
     settings.frontend_url = "http://test"
     settings.oidc_sync_roles = False
     settings.oidc_roles_claim = "groups"
@@ -47,10 +48,90 @@ def oidc_settings(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_decode_id_token_accepts_google_style_at_hash(monkeypatch, oidc_settings):
+    """Google id_token carrying at_hash must validate (regression for the
+    'Invalid OIDC id_token' failure: jwt.decode got no access_token)."""
+    import time
+
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from jose import jwt as jose_jwt
+    from jose.backends.cryptography_backend import CryptographyRSAKey
+    from jose.constants import ALGORITHMS
+
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    priv_jwk = CryptographyRSAKey(private, ALGORITHMS.RS256).to_dict()
+    pub_jwk = CryptographyRSAKey(private.public_key(), ALGORITHMS.RS256).to_dict()
+    pub_jwk.update({"kid": "test-key", "alg": "RS256", "use": "sig"})
+
+    access_token = "ya29.google-access-token"
+    issuer = "https://accounts.google.com"
+    now = int(time.time())
+    id_token = jose_jwt.encode(
+        {
+            "iss": issuer,
+            "aud": oidc_settings.oidc_client_id,
+            "sub": "google-sub-123",
+            "email": "user@gmail.com",
+            "email_verified": True,
+            "nonce": "nonce123",
+            "iat": now,
+            "exp": now + 600,
+        },
+        priv_jwk,
+        algorithm="RS256",
+        headers={"kid": "test-key"},
+        access_token=access_token,
+    )
+    assert "at_hash" in jose_jwt.get_unverified_claims(id_token)
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"keys": [pub_jwk]}
+
+    class _FakeAsyncClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, **k):
+            return _Resp()
+
+    monkeypatch.setattr(oidc_auth.httpx, "AsyncClient", _FakeAsyncClient)
+
+    discovery = {"jwks_uri": "https://accounts.google.com/jwks", "issuer": issuer}
+    claims = await oidc_auth._decode_id_token(discovery, id_token, "nonce123", access_token)
+    assert claims["sub"] == "google-sub-123"
+    assert claims["email"] == "user@gmail.com"
+
+
+@pytest.mark.asyncio
 async def test_oidc_config_disabled_by_default(client: AsyncClient, clean_db):
     response = await client.get("/api/auth/oidc/config")
     assert response.status_code == 200
-    assert response.json()["enabled"] is False
+    data = response.json()
+    assert data["enabled"] is False
+    assert data["local_auth_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_oidc_config_exposes_local_auth_disabled(client: AsyncClient, clean_db, oidc_settings):
+    oidc_settings.local_auth_enabled = False
+
+    response = await client.get("/api/auth/oidc/config")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["enabled"] is True
+    assert data["provider_name"] == "Pocket ID"
+    assert data["local_auth_enabled"] is False
 
 
 @pytest.mark.asyncio
@@ -102,7 +183,7 @@ async def test_oidc_callback_creates_user_and_redirects_with_securo_token(
         assert code == "abc"
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         assert id_token == "id-token"
         assert nonce == "nonce123"
         return {"sub": "user-sub", "email": "oidc@example.com", "email_verified": True, "name": "OIDC User"}
@@ -157,7 +238,7 @@ async def test_oidc_callback_syncs_existing_user_admin_and_workspace_role(
     async def fake_exchange(discovery, code, code_verifier=""):
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         return {
             "sub": "user-sub",
             "email": "test@example.com",
@@ -214,7 +295,7 @@ async def test_oidc_callback_sync_roles_can_revoke_admin(
     async def fake_exchange(discovery, code, code_verifier=""):
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         return {
             "sub": "user-sub",
             "email": "admin@example.com",
@@ -258,7 +339,7 @@ async def test_oidc_callback_signed_claims_override_userinfo_roles(
     async def fake_exchange(discovery, code, code_verifier=""):
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         return {
             "sub": "signed-sub",
             "email": "userinfo-override@example.com",
@@ -306,7 +387,7 @@ async def test_oidc_callback_rejects_userinfo_subject_mismatch(
     async def fake_exchange(discovery, code, code_verifier=""):
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         return {"sub": "signed-sub", "email": "oidc@example.com", "email_verified": True}
 
     async def fake_userinfo(discovery, access_token):
@@ -339,7 +420,7 @@ async def test_oidc_callback_requires_verified_email_claim_when_enabled(
     async def fake_exchange(discovery, code, code_verifier=""):
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         return {"sub": "signed-sub", "email": "oidc@example.com"}
 
     async def fake_userinfo(discovery, access_token):
@@ -372,7 +453,7 @@ async def test_oidc_callback_rejects_unlinked_existing_user_by_default(
     async def fake_exchange(discovery, code, code_verifier=""):
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         return {"sub": "new-sub", "email": "test@example.com", "email_verified": True}
 
     async def fake_userinfo(discovery, access_token):
@@ -407,7 +488,7 @@ async def test_oidc_callback_verified_email_link_mode_links_existing_user(
     async def fake_exchange(discovery, code, code_verifier=""):
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         return {"sub": "linked-sub", "email": "test@example.com", "email_verified": True}
 
     async def fake_userinfo(discovery, access_token):
@@ -448,7 +529,7 @@ async def test_oidc_callback_rejects_existing_user_with_different_linked_subject
     async def fake_exchange(discovery, code, code_verifier=""):
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         return {"sub": "different-sub", "email": "test@example.com", "email_verified": True}
 
     async def fake_userinfo(discovery, access_token):
@@ -486,7 +567,7 @@ async def test_oidc_callback_respects_disabled_registration_setting(
     async def fake_exchange(discovery, code, code_verifier=""):
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         return {"sub": "new-sub", "email": "new@example.com", "email_verified": True}
 
     async def fake_userinfo(discovery, access_token):
@@ -521,7 +602,7 @@ async def test_oidc_callback_email_link_mode_links_existing_user_without_verifie
     async def fake_exchange(discovery, code, code_verifier=""):
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         return {"sub": "unverified-linked-sub", "email": "test@example.com"}
 
     async def fake_userinfo(discovery, access_token):
@@ -563,7 +644,7 @@ async def test_oidc_callback_linked_user_can_login_without_verified_email_when_r
     async def fake_exchange(discovery, code, code_verifier=""):
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         return {"sub": "linked-sub", "email": "test@example.com"}
 
     async def fake_userinfo(discovery, access_token):
@@ -601,7 +682,7 @@ async def test_oidc_callback_linked_user_can_login_without_email_claim(
     async def fake_exchange(discovery, code, code_verifier=""):
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         return {"sub": "linked-sub"}
 
     async def fake_userinfo(discovery, access_token):
@@ -637,7 +718,7 @@ async def test_oidc_callback_registration_disabled_does_not_block_existing_email
     async def fake_exchange(discovery, code, code_verifier=""):
         return {"id_token": "id-token", "access_token": "provider-token"}
 
-    async def fake_decode(discovery, id_token, nonce):
+    async def fake_decode(discovery, id_token, nonce, access_token=""):
         return {"sub": "linked-with-registration-disabled", "email": "test@example.com"}
 
     async def fake_userinfo(discovery, access_token):

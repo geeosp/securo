@@ -34,6 +34,7 @@ OIDC_STATE_TTL = 600
 class OIDCConfigResponse(BaseModel):
     enabled: bool
     provider_name: str = "OIDC"
+    local_auth_enabled: bool = True
 
 
 async def _discover() -> dict[str, Any]:
@@ -57,8 +58,9 @@ def _redirect_uri() -> str:
 async def oidc_config():
     settings = get_settings()
     return OIDCConfigResponse(
-        enabled=bool(settings.oidc_enabled and settings.oidc_client_id and settings.oidc_discovery_url),
+        enabled=settings.oidc_login_available,
         provider_name=settings.oidc_provider_name or "OIDC",
+        local_auth_enabled=settings.local_auth_enabled,
     )
 
 
@@ -106,7 +108,7 @@ async def _exchange_code(discovery: dict[str, Any], code: str, code_verifier: st
     data = {
         "grant_type": "authorization_code",
         "client_id": settings.oidc_client_id,
-        "client_secret": settings.oidc_client_secret,
+        "client_secret": settings.oidc_client_secret.get_secret_value(),
         "code": code,
         "redirect_uri": _redirect_uri(),
         "code_verifier": code_verifier,
@@ -127,7 +129,9 @@ async def _fetch_userinfo(discovery: dict[str, Any], access_token: str) -> dict[
         return response.json()
 
 
-async def _decode_id_token(discovery: dict[str, Any], id_token: str, nonce: str) -> dict[str, Any]:
+async def _decode_id_token(
+    discovery: dict[str, Any], id_token: str, nonce: str, access_token: str = ""
+) -> dict[str, Any]:
     settings = get_settings()
     jwks_uri = discovery.get("jwks_uri")
     issuer = discovery.get("issuer")
@@ -148,6 +152,7 @@ async def _decode_id_token(discovery: dict[str, Any], id_token: str, nonce: str)
             algorithms=[key.get("alg", "RS256")],
             audience=settings.oidc_client_id,
             issuer=issuer,
+            access_token=access_token,
         )
     except JWTError as exc:
         raise HTTPException(status_code=400, detail="Invalid OIDC id_token") from exc
@@ -376,7 +381,9 @@ async def oidc_callback(
     id_token = token_response.get("id_token")
     if not id_token:
         raise HTTPException(status_code=400, detail="OIDC provider did not return an id_token")
-    claims = await _decode_id_token(discovery, id_token, state_data["nonce"])
+    claims = await _decode_id_token(
+        discovery, id_token, state_data["nonce"], token_response.get("access_token", "")
+    )
     userinfo = await _fetch_userinfo(discovery, token_response.get("access_token", ""))
     user = await _get_or_create_oidc_user(claims, userinfo, discovery.get("issuer", ""), session, user_manager)
     if not user.is_active:

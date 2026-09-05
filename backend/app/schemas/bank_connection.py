@@ -10,6 +10,17 @@ class BankConnectionBase(BaseModel):
     institution_name: str
 
 
+class ConnectionInstitutionRead(BaseModel):
+    """One institution reached through a connection (issue #345). Distinct
+    from InstitutionRead below, which is a provider's connectable-bank
+    catalog entry, not a linked institution."""
+
+    name: str
+    logo_url: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class BankConnectionRead(BankConnectionBase):
     id: uuid.UUID
     user_id: uuid.UUID
@@ -20,6 +31,9 @@ class BankConnectionRead(BankConnectionBase):
     status: str
     last_sync_at: Optional[datetime] = None
     created_at: datetime
+    # Institutions this link spans. Empty for providers that are one
+    # institution per connection — institution_name above covers those.
+    institutions: list[ConnectionInstitutionRead] = []
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -37,6 +51,8 @@ class OAuthCallbackRequest(BaseModel):
     code: str
     state: Optional[str] = None
     provider: Optional[str] = None
+    sync_assets: Optional[bool] = None
+    reconnect_connection_id: Optional[uuid.UUID] = None
 
 
 class ReauthUrlResponse(BaseModel):
@@ -75,3 +91,4 @@ class ConnectionSettingsUpdate(BaseModel):
     display_name: Optional[str] = None
     payee_source: Optional[Literal["auto", "merchant", "payment_data", "description", "none"]] = None
     import_pending: Optional[bool] = None
+    sync_assets: Optional[bool] = None

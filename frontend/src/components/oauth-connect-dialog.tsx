@@ -15,6 +15,7 @@ type Institution = {
   name: string
   display_name: string
   country: string
+  max_consent_days?: number | null
   logo?: string | null
 }
 
@@ -22,6 +23,7 @@ interface OAuthConnectDialogProps {
   open: boolean
   onClose: () => void
   provider: string
+  supportsAssetSync?: boolean
 }
 
 const LAST_COUNTRY_KEY = 'securo:lastOAuthCountry'
@@ -39,7 +41,7 @@ function countryLabel(code: string): string {
   return REGION_NAMES.of(code) || code
 }
 
-export function OAuthConnectDialog({ open, onClose, provider }: OAuthConnectDialogProps) {
+export function OAuthConnectDialog({ open, onClose, provider, supportsAssetSync = false }: OAuthConnectDialogProps) {
   const { t } = useTranslation()
   const [step, setStep] = useState<'country' | 'bank'>('country')
   const [country, setCountry] = useState<string | null>(null)
@@ -48,6 +50,7 @@ export function OAuthConnectDialog({ open, onClose, provider }: OAuthConnectDial
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [redirecting, setRedirecting] = useState(false)
+  const [syncAssets, setSyncAssets] = useState(true)
 
   // Reset when dialog opens.
   useEffect(() => {
@@ -57,6 +60,7 @@ export function OAuthConnectDialog({ open, onClose, provider }: OAuthConnectDial
     setInstitutions([])
     setError(null)
     setRedirecting(false)
+    setSyncAssets(true)
     setLoading(true)
     connections
       .listInstitutions(provider)
@@ -105,6 +109,8 @@ export function OAuthConnectDialog({ open, onClose, provider }: OAuthConnectDial
       const url = await connections.getOAuthUrl(provider, {
         country,
         institution_name: institution.name,
+        valid_until_days: institution.max_consent_days,
+        ...(supportsAssetSync ? { sync_assets: syncAssets } : {}),
       })
       window.location.assign(url)
     } catch (e) {
@@ -136,6 +142,24 @@ export function OAuthConnectDialog({ open, onClose, provider }: OAuthConnectDial
               : t('accounts.selectBankDesc')}
           </p>
         </DialogHeader>
+
+        {!redirecting && supportsAssetSync && (
+          <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
+            <div className="space-y-1">
+              <label htmlFor="oauth-sync-assets" className="text-sm font-medium text-foreground">
+                {t('connections.syncAssets')}
+              </label>
+              <p className="text-xs text-muted-foreground">{t('connections.syncAssetsHint')}</p>
+            </div>
+            <input
+              id="oauth-sync-assets"
+              type="checkbox"
+              checked={syncAssets}
+              onChange={(e) => setSyncAssets(e.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-primary"
+            />
+          </div>
+        )}
 
         {redirecting ? (
           <div className="py-12 flex flex-col items-center gap-3">
